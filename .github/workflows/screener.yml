@@ -21,7 +21,7 @@ jobs:
       - run: pip install requests
 
       - name: Jalankan screener
-        run: python screener_v2.py
+        run: python screener.py
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
