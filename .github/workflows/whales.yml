@@ -1,0 +1,41 @@
+name: Whale and News
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # cek tiap 10 menit (GitHub kadang telat beberapa menit)
+  workflow_dispatch:         # tombol "Run workflow" untuk tes manual
+
+permissions:
+  contents: write            # untuk menyimpan whale_state.json
+
+concurrency:
+  group: whale-news
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install requests
+
+      - name: Jalankan whale dan news
+        run: python whales.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Simpan state
+        run: |
+          git config user.name "screener-bot"
+          git config user.email "screener-bot@users.noreply.github.com"
+          git add whale_state.json || true
+          git commit -m "update state" || exit 0
+          git pull --rebase || true
+          git push || true
