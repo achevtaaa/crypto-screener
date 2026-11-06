@@ -2,7 +2,7 @@
 """
 Screener v5 -> Telegram
   1. Kondisi pasar: TOTAL3, BTC.D, USDT.D (dari CoinGecko, perkiraan) + kesimpulan risk-on / risk-off
-  2. Top 100 koin (market cap) dianalisa di 2 timeframe, 1D (arah) dan 1H (timing):
+  2. Top 150 koin (market cap) dianalisa di 2 timeframe, 1D (arah) dan 1H (timing):
        Stochastic 5,3,3 + EMA 13/21, plus OI 24 jam, funding rate, CVD spot (proxy)
   3. Koin yang punya setup oversold diberi SKOR 1-10 lalu dikirim ke Telegram (WIB)
 
@@ -30,15 +30,14 @@ CG_KEY = os.getenv("COINGECKO_API_KEY")
 WIB = timezone(timedelta(hours=7))
 
 # ---------- Parameter ----------
-TOP_COINS = 100
+TOP_COINS = 150
 SHOW = 8                     # jumlah koin yang dikirim
 CANDLES = 100
 STOCH_K, STOCH_SMOOTH, STOCH_D = 5, 3, 3
 EMA_FAST, EMA_SLOW = 13, 21
 OVERSOLD = 20
 TRIGGER_FROM = 25
-# >>> UBAH DI SINI: timeframe pendek untuk timing. Pilihan: "1h" atau "4h" (1D tetap untuk arah) <<<
-TF_LOW = "1h"
+TF_LOW = "4h"
 TF_LABEL = TF_LOW.upper()
 CVD_N = {"1h": 12, "4h": 6, "1d": 5}   # jumlah candle untuk hitung CVD proxy (kira-kira 12 jam / 24 jam / 5 hari)
 CVD_POSITIVE = 0.05
