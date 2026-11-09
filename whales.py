@@ -265,6 +265,29 @@ def fetch_feed(name, url):
     return items
 
 
+IMPACT = {
+    "Saylor/Strategy": "Pembelian BTC oleh Strategy biasanya dibaca positif (permintaan institusi). Penjualan atau tekanan pendanaan dibaca negatif.",
+    "CZ/Binance": "Berita Binance (listing, regulasi, keamanan) menggerakkan koin terkait dan sentimen bursa. Listing biasanya pump singkat lalu sering berbalik.",
+    "Vitalik": "Pernyataan atau penjualan ETH oleh Vitalik memengaruhi sentimen ETH dan ekosistemnya. Usulan teknis biasanya berdampak jangka panjang.",
+    "Trump/Gedung Putih": "Kebijakan atau pernyataan politik AS menggeser sentimen risk-on / risk-off dan koin terkait politik. Reaksi sering cepat dan berbalik.",
+    "The Fed/makro": "Sinyal suku bunga lebih ketat menekan kripto, lebih longgar mendukung. Lihat jadwal dan skenario di topik Pasar.",
+    "BlackRock/ETF": "Arus dana ETF dan institusi adalah sumber permintaan besar. Arus masuk atau persetujuan positif, arus keluar negatif.",
+    "SEC/regulator": "Gugatan atau penolakan regulator biasanya negatif untuk koin yang disebut. Kejelasan aturan atau persetujuan biasanya positif.",
+    "Ripple": "Perkembangan kasus atau produk Ripple terutama menggerakkan XRP dan koin sejenis.",
+    "Coinbase": "Listing di Coinbase biasanya pump singkat. Masalah hukum atau keamanan menekan sentimen.",
+    "Tether/Circle": "Isu cadangan stablecoin memengaruhi kepercayaan pasar. Penerbitan baru yang besar sering dibaca sebagai masuknya likuiditas.",
+    "Elon Musk": "Pernyataan Musk bisa memicu lonjakan jangka pendek di koin meme, sering berbalik cepat.",
+    "HACK/EXPLOIT": "Biasanya negatif untuk token atau protokol terkait dan sentimen DeFi. Pantau jumlah dana, ada tidaknya perbaikan, dan bursa yang menghentikan deposit.",
+}
+
+
+def impact_line(labels):
+    for lb in labels:
+        if lb in IMPACT:
+            return "\nDampak (pola umum, bukan ramalan): " + esc(IMPACT[lb])
+    return ""
+
+
 def check_news(state, baseline):
     seen = set(state.get("news_seen", []))
     cutoff = datetime.now(timezone.utc) - timedelta(hours=NEWS_MAX_AGE_H)
@@ -292,7 +315,8 @@ def check_news(state, baseline):
             if it["w"] >= NEWS_IMPORTANT_WEIGHT:
                 title = f"<i>{title}</i>"                  # penting = miring
             t = it["ts"].astimezone(WIB).strftime("%H:%M")
-            alerts.append(f"<b>❗️ NEWS DARI ({esc(who)}) ❗️</b>\n{title}\n{esc(it['src'])} {t} WIB\n{esc(it['link'])}")
+            alerts.append(f"<b>❗️ NEWS DARI ({esc(who)}) ❗️</b>\n{title}\n{esc(it['src'])} {t} WIB"
+                          f"{impact_line(it['labels'])}\n{esc(it['link'])}")
     state["news_seen"] = (list(seen | {it["key"] for it in found}))[-600:]
     return alerts, bool(found)
 
@@ -338,12 +362,29 @@ def check_holders(state, baseline):
 
 
 # ================================================================ kirim
-def send(text):
-    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-                      data={"chat_id": TG_CHAT, "text": text[:4000], "parse_mode": "HTML",
-                            "disable_web_page_preview": "true"}, timeout=15)
+def send_routed(chunk, topic):
+    """Kirim ke topik grup kalau routes.json ada; kalau belum diatur atau gagal, kirim ke chat pribadi."""
+    try:
+        with open("routes.json") as f:
+            routes = json.load(f)
+    except Exception:
+        routes = {}
+    base = {"text": chunk[:4000], "parse_mode": "HTML", "disable_web_page_preview": "true"}
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    gid, thread = routes.get("group"), routes.get(topic)
+    if gid and thread:
+        r = requests.post(url, data=dict(base, chat_id=gid, message_thread_id=thread), timeout=15)
+        if r.status_code == 200:
+            time.sleep(0.5)
+            return
+        print("kirim ke topik gagal:", r.status_code, "-> kirim ke chat pribadi")
+    r = requests.post(url, data=dict(base, chat_id=TG_CHAT), timeout=15)
     r.raise_for_status()
     time.sleep(0.5)
+
+
+def send(text):
+    send_routed(text, "intel")
 
 
 def main():
