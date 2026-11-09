@@ -1,0 +1,4 @@
+{
+  "_petunjuk": "Isi daftar wallets dengan alamat yang SUDAH Anda verifikasi dari sumber publik. chain: eth atau btc. Contoh satu entri: {\"label\": \"Nama\", \"chain\": \"eth\", \"address\": \"0x...\"}",
+  "wallets": []
+}

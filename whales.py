@@ -191,6 +191,36 @@ def whale_positions(addr):
     return out
 
 
+
+ROT_MIN_USD = 500_000          # perubahan BTC minimal segini dianggap rotasi
+
+
+def _net(pos, coins):
+    return sum((p["usd"] if p["side"] == "LONG" else -p["usd"]) for c, p in pos.items() if c in coins)
+
+
+def rotation_alert(addr, name, prev, pos):
+    """Whale mengurangi BTC lalu menambah alt (atau sebaliknya) pada pembaruan yang sama."""
+    btc_p, btc_n = _net(prev, {"BTC"}), _net(pos, {"BTC"})
+    alts = (set(prev) | set(pos)) - {"BTC"}
+    alt_p, alt_n = _net(prev, alts), _net(pos, alts)
+    d_btc, d_alt = btc_n - btc_p, alt_n - alt_p
+    if d_btc <= -ROT_MIN_USD and d_alt >= ROT_MIN_USD * 0.5:
+        arah, ket = "BTC -> ALT", "Whale ini mengurangi BTC dan menambah alt."
+    elif d_btc >= ROT_MIN_USD and d_alt <= -ROT_MIN_USD * 0.5:
+        arah, ket = "ALT -> BTC", "Whale ini mengurangi alt dan menambah BTC (tanda lari ke aman)."
+    else:
+        return None
+    who = short(addr) + (f" ({esc(name)})" if name else "")
+    top = sorted(((c, _net(pos, {c}) - _net(prev, {c})) for c in alts), key=lambda x: abs(x[1]), reverse=True)[:3]
+    det = ", ".join(f"{esc(c)} {money(abs(v))} {'tambah' if v > 0 else 'kurang'}" for c, v in top if abs(v) >= 50_000)
+    text = (f"<b>🔄 ROTASI WHALE 🔄</b>\n<b>{arah}</b>\n{who}\n"
+            f"BTC: {money(d_btc)} | Alt (bersih): {money(d_alt)}\n")
+    if det:
+        text += f"Perubahan terbesar: {det}\n"
+    return text + f"<i>{ket} Satu whale bukan tren pasar, cek dulu sebelum mengikuti.</i>"
+
+
 def whale_msg(action, addr, name, coin, now, prev, big):
     who = f"{short(addr)}" + (f" ({esc(name)})" if name else "")
     lines = [f"<b>🚨 WHALE ALERT 🚨</b>", f"<b>{esc(action)}</b>"]
@@ -224,6 +254,9 @@ def check_whales(state, baseline):
         wstate[addr] = pos
         if prev is None or baseline:
             continue                                   # rekam kondisi awal tanpa alert
+        rot = rotation_alert(addr, name, prev, pos)
+        if rot:
+            alerts.append(rot)
         for coin in set(pos) | set(prev):
             n, p = pos.get(coin), prev.get(coin)
             if n and not p and n["usd"] >= ALERT_MIN_USD:

@@ -47,6 +47,7 @@ TF_CFG = {  # bar OKX, milidetik per candle, jumlah candle diambil, batas waktu 
     "1h": ("1H", 3600_000, 3000, 48),
 }
 DAY_MS = 86_400_000
+BTC_REG = ([], [])                 # (waktu buka candle 1D BTC, apakah close di atas EMA50)
 
 
 # ------------------------------------------------------------------ data
@@ -110,6 +111,20 @@ def summarize(rs):
     return {"n": n, "win": sum(1 for _, w in rs if w) / n, "exp": sum(x for x, _ in rs) / n}
 
 
+def load_btc_regime():
+    global BTC_REG
+    day = fetch_history("BTC-USDT", "1D", 1400)
+    closes = [c[4] for c in day]
+    e50 = S.ema(closes, 50)
+    BTC_REG = ([c[0] for c in day], [e is not None and cl > e for cl, e in zip(closes, e50)])
+
+
+def btc_up_at(close_time):
+    dts, up = BTC_REG
+    j = bisect.bisect_right(dts, close_time - DAY_MS) - 1
+    return up[j] if 0 <= j < len(up) else None
+
+
 def run_coin(inst, tf, out):
     bar, ms, want, horizon = TF_CFG[tf]
     low = fetch_history(inst, bar, want)
@@ -145,7 +160,8 @@ def run_coin(inst, tf, out):
         risk = S.risk_flags(win, 0)                                # tanpa likuiditas (tidak ada data historis)
         score = S.evaluate(d1, h1, {"funding": None, "oi_chg": None}, risk)
         out["signals"].append({"score": score, "res": res, "counter": d1["counter"],
-                               "cvd_pos": h1["cvd"] >= S.CVD_POSITIVE, "risk": bool(risk)})
+                               "cvd_pos": h1["cvd"] >= S.CVD_POSITIVE, "risk": bool(risk),
+                               "btc_up": btc_up_at(close_time)})
     return True
 
 
@@ -165,6 +181,10 @@ def build_report(out, tf, coins_used):
         "CVD negatif": summarize([s["res"] for s in sig if not s["cvd_pos"]]),
         "ada tanda bandar": summarize([s["res"] for s in sig if s["risk"]]),
         "tanpa tanda bandar": summarize([s["res"] for s in sig if not s["risk"]]),
+        "BTC di atas EMA50 1D": summarize([s["res"] for s in sig if s["btc_up"]]),
+        "BTC di bawah EMA50 1D": summarize([s["res"] for s in sig if s["btc_up"] is False]),
+        "KOMBINASI: searah tren + CVD+ + tanpa bandar + BTC naik": summarize(
+            [s["res"] for s in sig if not s["counter"] and s["cvd_pos"] and not s["risk"] and s["btc_up"]]),
     }
     hi = b["tinggi"]
     if hi["n"] < MIN_N:
@@ -217,6 +237,10 @@ def main():
     ranked = sorted(((b, t) for b, t in tick.items() if not S.excluded(b)),
                     key=lambda x: x[1]["vol"], reverse=True)[:BT_COINS]
     out, used = {"signals": [], "baseline": []}, 0
+    try:
+        load_btc_regime()
+    except Exception as e:
+        print("regime BTC gagal:", type(e).__name__)
     for base, t in ranked:
         try:
             used += bool(run_coin(t["id"], tf, out))
