@@ -35,7 +35,7 @@ jobs:
         run: |
           git config user.name "screener-bot"
           git config user.email "screener-bot@users.noreply.github.com"
-          git add intel2_state.json || true
+          git add intel2_state.json narasi_map.json || true
           git commit -m "update intel2 state" || exit 0
           git pull --rebase || true
           git push || true
