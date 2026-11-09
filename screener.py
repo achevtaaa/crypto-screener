@@ -26,6 +26,11 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+try:
+    import bantu
+except ImportError:
+    bantu = None
+
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
 CG_KEY = os.getenv("COINGECKO_API_KEY")
@@ -538,8 +543,10 @@ def coin_text(r):
     line_tf = esc(f"  {TF_LABEL}: {sig} | Stoch {h1['k']:.0f}/{h1['d']:.0f} | {t2} | harga {p2} EMA13")
     if fresh and not d1["counter"]:
         line_tf = f"<i>{line_tf}</i>"                          # penting: trigger baru dan searah tren 1D
+    tag = bantu.narasi_label(r["symbol"][:-4] if r["symbol"].endswith("USDT") else r["symbol"]) if bantu else ""
     lines = [f"<b><u>{esc(r['symbol'])}</u></b>  {score_txt}{esc(rk)}",
              esc(f"  Harga {r['price']:g} | 24j {r['chg24h']:+.1f}%"),
+             *([f"  🏷️ Narasi: {esc(tag)}"] if tag else []),
              esc(f"  1D: Stoch {d1['k']:.0f}/{d1['d']:.0f} | {t1} | harga {p1} EMA13{warn1}"),
              line_tf,
              esc(f"  OI 24j {_f(r['oi_chg'])}% | Funding {_f(r['funding'], '{:+.4f}')}%"),

@@ -29,6 +29,11 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
+try:
+    import bantu
+except ImportError:          # file bantu.py belum diupload: berita tetap jalan tanpa terjemahan
+    bantu = None
+
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
 WIB = timezone(timedelta(hours=7))
@@ -51,7 +56,17 @@ MAX_NEWS_PER_RUN = 5
 FEEDS = [("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
          ("Cointelegraph", "https://cointelegraph.com/rss"),
          ("Decrypt", "https://decrypt.co/feed"),
-         ("The Block", "https://www.theblock.co/rss.xml")]
+         ("The Block", "https://www.theblock.co/rss.xml"),
+         ("CryptoSlate", "https://cryptoslate.com/feed/"),
+         ("Bitcoin Magazine", "https://bitcoinmagazine.com/feed"),
+         ("CryptoPotato", "https://cryptopotato.com/feed/"),
+         ("BeInCrypto", "https://beincrypto.com/feed/"),
+         ("U.Today", "https://u.today/rss"),
+         ("Daily Hodl", "https://dailyhodl.com/feed/"),
+         ("Bitcoinist", "https://bitcoinist.com/feed/"),
+         ("NewsBTC", "https://www.newsbtc.com/feed/"),
+         ("CoinGape", "https://coingape.com/feed/")]
+# Sumber yang tidak bisa dibuka dilewati otomatis. Satu berita yang sama dari banyak situs hanya dikirim sekali.
 # (regex, label, bobot, case_sensitive)
 PEOPLE = [
     (r"\bsaylor\b|\bstrategy\b|\bmicrostrategy\b", "Saylor/Strategy", 3, False),
@@ -324,13 +339,17 @@ def impact_line(labels):
 def check_news(state, baseline):
     seen = set(state.get("news_seen", []))
     cutoff = datetime.now(timezone.utc) - timedelta(hours=NEWS_MAX_AGE_H)
-    found, keys = [], set()
+    found, keys, tok_list = [], set(), []
     for name, url in FEEDS:
         for it in fetch_feed(name, url):
             key = re.sub(r"\W+", "", it["title"].lower())[:70]
             if key in keys:
                 continue
+            toks = set(re.findall(r"[a-z0-9]{3,}", it["title"].lower()))
+            if any(len(toks & o) / max(1, len(toks | o)) >= 0.6 for o in tok_list):
+                continue                                   # berita yang sama dari situs lain
             keys.add(key)
+            tok_list.append(toks)
             labels, weight = [], 0
             for pat, label, w, cs in PEOPLE:
                 if re.search(pat, it["title"], 0 if cs else re.I):
@@ -344,7 +363,7 @@ def check_news(state, baseline):
     if not baseline:
         for it in fresh[:MAX_NEWS_PER_RUN]:
             who = ", ".join(dict.fromkeys(it["labels"]))
-            title = esc(it["title"])
+            title = esc(bantu.translate_id(it["title"]) if bantu else it["title"])      # judul diterjemahkan ke Indonesia
             if it["w"] >= NEWS_IMPORTANT_WEIGHT:
                 title = f"<i>{title}</i>"                  # penting = miring
             t = it["ts"].astimezone(WIB).strftime("%H:%M")

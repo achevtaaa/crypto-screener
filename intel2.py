@@ -4,7 +4,7 @@ Intel Plus: pelengkap whales.py. Semua alert masuk ke topik Intel dengan judul b
 
   💵 STABLECOIN         pencetakan / pembakaran USDT & USDC besar dalam 24 jam (DefiLlama)
   🧨 POSISI TERLALU RAMAI  funding ekstrem di koin besar (OKX), rawan squeeze
-  💤 KOIN BANGUN TIDUR  volume 24 jam melonjak di koin yang lama sepi dan harganya sideways (OKX)
+  💤 KOIN BANGUN TIDUR  volume 24 jam melonjak 4-8x di koin kripto yang lama sepi dan sideways; hanya yang CVD positif dan tanpa tanda bandar (OKX)
   🕵️ WALLET PANTAUAN    wallet pilihan di wallets.json (ETH lewat Ethplorer, BTC lewat mempool.space)
 
 (Rotasi whale BTC -> alt ada di whales.py: 🔄 ROTASI WHALE.)
@@ -23,6 +23,11 @@ from datetime import datetime, timezone, timedelta
 import requests
 
 import screener as S
+
+try:
+    import bantu
+except ImportError:
+    bantu = None
 
 STATE_FILE = "intel2_state.json"
 WALLET_FILE = "wallets.json"
@@ -48,6 +53,8 @@ DORM_RATIO = 4.0                         # volume sekarang >= 4x normal
 DORM_MAX_RANGE = 0.70                    # rentang harga 30 hari <= 70% (sideways)
 DORM_CHG_MIN, DORM_CHG_MAX = -4.0, 10.0  # perubahan harga 24 jam: belum meledak
 DORM_MAX_7D = 25.0                       # naik 7 hari <= 25% (belum terlambat)
+DORM_MAX_RATIO = 8.0                     # lonjakan >= 8x justru jelek di backtest, dilewati
+TOKENIZED_BLOCK = {"XQQQ", "XMU"}        # aset saham/ETF yang dibuat token, bukan koin kripto
 DORM_COOLDOWN_H = 72
 DORM_MAX_ALERTS = 3
 
@@ -171,6 +178,28 @@ def check_funding(tick, state):
 
 
 # ================================================================ 💤 koin bangun tidur
+def daily_candles(inst):
+    """Candle 1D OKX yang sudah tutup, dengan waktu: (high, low, close, quote_vol, ts_ms), urut naik."""
+    j, _ = S.http_get("https://www.okx.com/api/v5/market/candles",
+                      {"instId": inst, "bar": "1D", "limit": str(S.CANDLES)})
+    if not j or j.get("code") != "0":
+        return None
+    rows = sorted((r for r in j["data"] if r[8] == "1"), key=lambda r: int(r[0]))
+    return [(float(r[2]), float(r[3]), float(r[4]), float(r[7]), int(r[0])) for r in rows]
+
+
+def looks_tokenized(raw):
+    """Saham/ETF yang dibuat token hampir tidak diperdagangkan di akhir pekan. Kripto asli ramai 24/7."""
+    wk, we = [], []
+    for h, l, c, v, ts in raw[-56:]:
+        day = datetime.fromtimestamp(ts / 1000, timezone(timedelta(hours=8))).weekday()
+        (we if day >= 5 else wk).append(v)
+    if len(wk) < 20 or len(we) < 8:
+        return False
+    med = lambda a: sorted(a)[len(a) // 2]
+    return med(wk) > 0 and med(we) < 0.2 * med(wk)
+
+
 def check_dormant(tick, state):
     last = state.get("dormant_scan")
     if hours_since(last) < DORM_EVERY_H:
@@ -183,10 +212,13 @@ def check_dormant(tick, state):
     for base, t in uni:
         if hours_since(cool.get(base)) < DORM_COOLDOWN_H:
             continue
-        c = S.okx_candles(t["id"], "1d")
+        raw = daily_candles(t["id"])
         time.sleep(0.15)
-        if not c or len(c) < 60:
+        if not raw or len(raw) < 60:
             continue
+        if base in TOKENIZED_BLOCK or looks_tokenized(raw):
+            continue
+        c = [x[:4] for x in raw]
         vols = sorted(x[3] for x in c[-60:-3])
         med = vols[len(vols) // 2]
         if med < DORM_MIN_MED or med <= 0:
@@ -204,17 +236,21 @@ def check_dormant(tick, state):
         if chg7 > DORM_MAX_7D:
             continue
         cvd = S.cvd_proxy(c, 5)[0]
-        risk = S.risk_flags(c, t["vol"])
+        if cvd < S.CVD_POSITIVE or S.risk_flags(c, 0) or ratio >= DORM_MAX_RATIO:
+            continue                                  # sama dengan syarat uji historis: CVD+, tanpa tanda bandar, bukan lonjakan ekstrem
+        risk = S.risk_flags(c, t["vol"])              # untuk tampilan: peringatan likuiditas tipis tetap ditampilkan
         hits.append((ratio, base, t, med, rng, chg7, cvd, risk))
     hits.sort(reverse=True, key=lambda x: x[0])
     out = []
     for ratio, base, t, med, rng, chg7, cvd, risk in hits[:DORM_MAX_ALERTS]:
         cool[base] = time.time()
         support = cvd >= S.CVD_POSITIVE
+        tag = bantu.narasi_label(base) if bantu else ""
         lines = [f"<b>💤 KOIN BANGUN TIDUR 💤</b>",
-                 f"<b><u>{esc(base)}</u></b> volume 24 jam {money(t['vol'])} = <b>{ratio:.1f}x</b> normal ({money(med)}/hari)",
-                 f"Harga {t['last']:g} | 24j {t['chg']:+.1f}% | 7 hari {chg7:+.1f}% | rentang 30 hari hanya {rng * 100:.0f}%",
-                 f"CVD spot (proxy, 5 hari): {cvd:+.2f} " + ("(tekanan beli mendukung)" if support else "(BELUM mendukung: bisa jadi distribusi)")]
+                 f"<b><u>{esc(base)}</u></b>" + (f"  🏷️ {esc(tag)}" if tag else "") + "\n"
+                 f"📊 Volume 24 jam {money(t['vol'])} = <b>{ratio:.1f}x</b> normal ({money(med)}/hari)",
+                 f"💰 Harga {t['last']:g} | 24j {t['chg']:+.1f}% | 7 hari {chg7:+.1f}% | rentang 30 hari hanya {rng * 100:.0f}%",
+                 f"🟣 CVD spot (proxy, 5 hari): {cvd:+.2f} " + ("(tekanan beli mendukung)" if support else "(BELUM mendukung: bisa jadi distribusi)")]
         if risk:
             lines.append("<i>⚠️ " + esc("; ".join(risk)) + "</i>")
         lines.append("<i>Volume naik duluan bisa tanda akumulasi, tapi juga bisa pump yang disiapkan. "
@@ -303,6 +339,11 @@ def check_wallets(tick, state):
 def main():
     dry = "--dry-run" in sys.argv
     state = load_state()
+    if bantu and not dry:
+        try:
+            bantu.refresh_if_old()                  # perbarui peta narasi maks seminggu sekali
+        except Exception as e:
+            print("peta narasi gagal diperbarui:", type(e).__name__)
     tick, err = S.okx_tickers()
     msgs = []
     if state.get("started") is None and not dry:
