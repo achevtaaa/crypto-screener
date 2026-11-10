@@ -1,0 +1,33 @@
+name: Narasi
+
+on:
+  schedule:
+    # 07:15 dan 19:15 WIB (UTC+7) = 00:15 dan 12:15 UTC
+    - cron: "15 0,12 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  narasi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Pasang font Inter
+        run: sudo apt-get update && sudo apt-get install -y fonts-inter
+
+      - name: Pasang dependensi
+        run: pip install -r requirements.txt
+
+      - name: Kirim peta narasi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_THREAD_ID_NARASI: ${{ secrets.TELEGRAM_THREAD_ID_NARASI }}
+          TELEGRAM_THREAD_ID_PASAR: ${{ secrets.TELEGRAM_THREAD_ID_PASAR }}
+        run: python narasi.py

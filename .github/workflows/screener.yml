@@ -1,35 +1,33 @@
-name: Crypto Screener
+name: Screener
 
 on:
   schedule:
-    - cron: "0 0,12 * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: write
+    # 07:05 dan 19:05 WIB (UTC+7) = 00:05 dan 12:05 UTC
+    - cron: "5 0,12 * * *"
+  workflow_dispatch: {}
 
 jobs:
-  run:
+  screener:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - run: pip install requests
+      - name: Pasang font Inter
+        run: sudo apt-get update && sudo apt-get install -y fonts-inter
+
+      - name: Pasang dependensi
+        run: pip install -r requirements.txt
 
       - name: Jalankan screener
-        run: python screener.py
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
-      - name: Simpan log
-        run: |
-          git config user.name "screener-bot"
-          git config user.email "screener-bot@users.noreply.github.com"
-          git add screener_log.csv || true
-          git commit -m "update log" || exit 0
-          git push
+          TELEGRAM_THREAD_ID_SCREENER: ${{ secrets.TELEGRAM_THREAD_ID_SCREENER }}
+          SCREENER_MIN_SKOR: ${{ vars.SCREENER_MIN_SKOR }}
+        run: python screener.py
