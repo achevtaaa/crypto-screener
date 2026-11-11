@@ -21,10 +21,10 @@ Aturan skor (ubah di fungsi score_* bila mau):
     CVD spot 24 jam: naik +2, datar +1, turun 0
       (CVD dihitung dari taker buy - taker sell spot OKX, bar 1 jam)
 
-Env untuk kirim:
-  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_THREAD_ID_SCREENER
+Tujuan Telegram dibaca dari routes.json (kunci "group" dan topik "screener").
+Token: env TELEGRAM_BOT_TOKEN atau TELEGRAM_TOKEN.
 Env opsional:
-  SCREENER_MIN_SKOR (default 5), COINGECKO_KEY
+  SCREENER_MIN_SKOR (default 5; kosong = default), COINGECKO_KEY
 
 Pemakaian:
   python screener.py          # jalankan, kirim ke Telegram
@@ -43,8 +43,18 @@ TOP_N = 100
 STAGE2_N = 12
 SHOW_N = 5
 MIN_TECH = 3
-MIN_SKOR = int(os.environ.get("SCREENER_MIN_SKOR", "5"))
-THREAD = ("TELEGRAM_THREAD_ID_SCREENER",)
+THREAD = ("screener",)  # nama topik di routes.json
+
+
+def _int_env(name, default):
+    """Baca env bilangan bulat; kosong atau salah -> default (env kosong tidak boleh bikin crash)."""
+    try:
+        return int((os.environ.get(name) or "").strip() or default)
+    except ValueError:
+        return default
+
+
+MIN_SKOR = _int_env("SCREENER_MIN_SKOR", 5)
 
 EXCLUDE = {"USDT", "USDC", "DAI", "FDUSD", "USDE", "USDS", "TUSD", "PYUSD", "USD1", "USDD", "BUIDL",
            "STETH", "WSTETH", "WEETH", "WBTC", "WETH", "WBETH", "CBBTC", "CBETH", "SUSDE", "USDG",
@@ -212,6 +222,11 @@ def run():
     top = sorted((x for x in found if x["tech"] >= MIN_TECH), key=lambda x: (-x["tech"], x["k1d"]))[:STAGE2_N]
     for x in top:
         derivs(x)
+    if top:
+        print(f"tahap 2: {len(top)} koin dicek; data kosong -> funding {sum(x['fund'] is None for x in top)}, "
+              f"OI {sum(x['oi'] is None for x in top)}, CVD {sum(x['cvd'] is None for x in top)}")
+        for x in top:
+            print(f"  {x['sym']}: teknikal {x['tech']} -> skor {x['skor']}")
     final = sorted((x for x in top if x["skor"] >= MIN_SKOR), key=lambda x: (-x["skor"], x["k1d"]))
     return final[:SHOW_N], scanned
 

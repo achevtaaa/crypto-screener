@@ -3,16 +3,16 @@
 
 Sektor = keranjang koin yang Anda atur sendiri di SEKTOR di bawah (cukup ubah daftar
 simbolnya). Koin yang tidak punya perpetual USDT di OKX dilewati otomatis; sektor
-dengan < 3 koin tersedia tidak ditampilkan.
+dengan < 2 koin tersedia tidak ditampilkan.
 
 Performa:
   7 HARI  = harga kini vs close candle harian ke-8 dari belakang (~7 hari)
   24 JAM  = harga kini vs open 24 jam OKX
   Nilai sektor = MEDIAN koin di keranjang (tahan terhadap satu koin yang pump/dump).
 
-Env untuk kirim:
-  TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-  TELEGRAM_THREAD_ID_NARASI (jika kosong, pakai TELEGRAM_THREAD_ID_PASAR)
+Tujuan Telegram dibaca dari routes.json (kunci "group" dan topik "narasi";
+jika topik "narasi" tidak ada, dipakai topik "pasar").
+Token: env TELEGRAM_BOT_TOKEN atau TELEGRAM_TOKEN.
 
 Pemakaian:
   python narasi.py          # jalankan, kirim ke Telegram
@@ -24,8 +24,8 @@ from statistics import median
 
 from common import GREEN, MUTED, RED, TRACK, W, Pen, font, okx, pct, send_photo, stamp
 
-THREAD = ("TELEGRAM_THREAD_ID_NARASI", "TELEGRAM_THREAD_ID_PASAR")
-MIN_ANGGOTA = 3
+THREAD = ("narasi", "pasar")  # nama topik di routes.json (urut prioritas)
+MIN_ANGGOTA = 2
 
 # ---- ATUR SEKTOR DI SINI (simbol koin, tanpa -USDT) ------------------------
 SEKTOR = {

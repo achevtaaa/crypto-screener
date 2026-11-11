@@ -1,7 +1,12 @@
-"""Bagian bersama untuk screener.py dan narasi.py:
+"""Bagian bersama untuk screener.py, narasi.py, pasar_kartu.py:
 gaya kartu, font, panggilan OKX (dengan jeda anti rate-limit), kirim Telegram.
+
+Tujuan Telegram dibaca dari routes.json di folder yang sama, contoh isi:
+  {"group": -1004389304375, "screener": 2, "intel": 3, "pasar": 9, "narasi": 14}
+Token dibaca dari env TELEGRAM_BOT_TOKEN atau TELEGRAM_TOKEN (secret GitHub).
 """
 import io
+import json
 import os
 import sys
 import time
@@ -144,32 +149,73 @@ def okx(path, params=None, gap=0.07):
 # Telegram
 # --------------------------------------------------------------------------
 
-def _target(thread_envs):
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    chat = os.environ["TELEGRAM_CHAT_ID"]
-    thread = next((os.environ[e] for e in thread_envs if os.environ.get(e)), None)
-    return token, chat, thread
+ROUTES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "routes.json")
+
+HINTS = [
+    ("message thread not found", "ID topik salah atau topik itu tidak ada di grup. Cek routes.json."),
+    ("chat not found", "Chat ID salah, atau bot belum dimasukkan ke grup."),
+    ("upgraded to a supergroup", "Chat ID lama. Pakai ID supergroup yang diawali -100 di routes.json."),
+    ("not enough rights", "Bot belum jadi admin atau tidak boleh mengirim di topik itu."),
+    ("have no rights to send", "Bot belum jadi admin atau tidak boleh mengirim di topik itu."),
+    ("TOPIC_CLOSED", "Topik sedang ditutup. Buka kembali topiknya."),
+    ("Unauthorized", "Token bot salah. Cek secret TELEGRAM_TOKEN."),
+]
 
 
-def send_photo(img, caption, thread_envs=()):
-    token, chat, thread = _target(thread_envs)
+def _routes():
+    try:
+        with open(ROUTES_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] routes.json tidak terbaca ({e})", file=sys.stderr)
+        return {}
+
+
+def _target(topics):
+    """topics = nama topik di routes.json, urut prioritas, mis. ("narasi", "pasar")."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
+    if not token:
+        raise SystemExit("Token Telegram tidak ada. Isi secret TELEGRAM_TOKEN dan petakan di workflow.")
+    routes = _routes()
+    chat = routes.get("group") or os.environ.get("TELEGRAM_CHAT_ID")
+    if not chat:
+        raise SystemExit('Chat ID tidak ada. Isi "group" di routes.json.')
+    for name in topics:
+        if routes.get(name):
+            print(f"Tujuan: topik '{name}' (thread {routes[name]})")
+            return token, str(chat), str(routes[name])
+    for name in topics:
+        v = os.environ.get(f"TELEGRAM_THREAD_ID_{name.upper()}")
+        if v:
+            print(f"Tujuan: topik '{name}' dari secret (thread {v})")
+            return token, str(chat), v
+    raise SystemExit(f"ID topik {list(topics)} tidak ada di routes.json. "
+                     "Tambahkan, contoh: {\"group\": -100..., \"narasi\": 14}")
+
+
+def _post(token, method, **kw):
+    r = requests.post(f"https://api.telegram.org/bot{token}/{method}", timeout=60, **kw)
+    if not r.ok:
+        try:
+            desc = r.json().get("description", r.text[:300])
+        except Exception:  # noqa: BLE001
+            desc = r.text[:300]
+        hint = next((h for k, h in HINTS if k.lower() in desc.lower()), "")
+        raise SystemExit(f"Telegram menolak ({r.status_code}): {desc}" + (f"\n=> {hint}" if hint else ""))
+    return r
+
+
+def send_photo(img, caption, topics=()):
+    token, chat, thread = _target(topics)
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)
     buf.seek(0)
-    data = {"chat_id": chat, "caption": caption[:1024]}
-    if thread:
-        data["message_thread_id"] = thread
-    r = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", data=data,
-                      files={"photo": ("kartu.png", buf, "image/png")}, timeout=60)
-    r.raise_for_status()
+    data = {"chat_id": chat, "caption": caption[:1024], "message_thread_id": thread}
+    _post(token, "sendPhoto", data=data, files={"photo": ("kartu.png", buf, "image/png")})
     print("Terkirim ke Telegram.")
 
 
-def send_text(text, thread_envs=()):
-    token, chat, thread = _target(thread_envs)
-    data = {"chat_id": chat, "text": text[:4096]}
-    if thread:
-        data["message_thread_id"] = thread
-    r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=30)
-    r.raise_for_status()
+def send_text(text, topics=()):
+    token, chat, thread = _target(topics)
+    _post(token, "sendMessage", data={"chat_id": chat, "text": text[:4096], "message_thread_id": thread})
     print("Teks terkirim ke Telegram.")
