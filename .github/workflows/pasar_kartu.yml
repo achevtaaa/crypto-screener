@@ -1,0 +1,31 @@
+name: Pasar Kartu
+
+on:
+  schedule:
+    # 07:00 dan 19:00 WIB (UTC+7) = 00:00 dan 12:00 UTC
+    - cron: "0 0,12 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  pasar-kartu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Pasang font Inter
+        run: sudo apt-get update && sudo apt-get install -y fonts-inter
+
+      - name: Pasang dependensi
+        run: pip install -r requirements.txt
+
+      - name: Kirim kartu Pasar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          PASAR_EVENT: ${{ vars.PASAR_EVENT }}
+        run: python pasar_kartu.py

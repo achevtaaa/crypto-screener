@@ -27,7 +27,4 @@ jobs:
       - name: Kirim peta narasi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_THREAD_ID_NARASI: ${{ secrets.TELEGRAM_THREAD_ID_NARASI }}
-          TELEGRAM_THREAD_ID_PASAR: ${{ secrets.TELEGRAM_THREAD_ID_PASAR }}
         run: python narasi.py

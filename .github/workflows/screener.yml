@@ -27,7 +27,4 @@ jobs:
       - name: Jalankan screener
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_THREAD_ID_SCREENER: ${{ secrets.TELEGRAM_THREAD_ID_SCREENER }}
-          SCREENER_MIN_SKOR: ${{ vars.SCREENER_MIN_SKOR }}
         run: python screener.py
