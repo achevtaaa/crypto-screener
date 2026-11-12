@@ -23,7 +23,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
+      - name: Pasang font Inter
+        run: sudo apt-get update && sudo apt-get install -y fonts-inter
+
+      - name: Pasang dependensi
+        run: pip install -r requirements.txt
 
       - name: Jalankan pasar dan narasi
         run: python pasar.py
