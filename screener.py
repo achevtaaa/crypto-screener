@@ -6,7 +6,7 @@ Cara kerja (2 tahap, supaya hemat panggilan API):
            dihitung secara teknikal pada TF 1D + 4H  -> skor teknikal 0-6
   Tahap 2  12 koin teratas dicek derivatif (funding, OI, CVD spot) -> skor 0-4
            Skor akhir = teknikal + derivatif, dibatasi 1-10.
-           Yang ditampilkan: skor >= SCREENER_MIN_SKOR (default 5), maks. 5 koin.
+           Yang ditampilkan: skor >= SCREENER_MIN_SKOR (default 5), maks. SCREENER_SHOW_N koin (default 7).
 
 Aturan skor (ubah di fungsi score_* bila mau):
   Teknikal (maks 6)
@@ -23,25 +23,39 @@ Aturan skor (ubah di fungsi score_* bila mau):
 
 Tujuan Telegram dibaca dari routes.json (kunci "group" dan topik "screener").
 Token: env TELEGRAM_BOT_TOKEN atau TELEGRAM_TOKEN.
-Env opsional:
-  SCREENER_MIN_SKOR (default 5; kosong = default), COINGECKO_KEY
+Env opsional (kosong = pakai default):
+  SCREENER_MIN_SKOR (5), SCREENER_SHOW_N (7), SCREENER_RISK_USD (1), SCREENER_SL_ATR (1.5),
+  COINGECKO_KEY
+
+Kartu baru ada di screener_image.py (+ imgkit.py): maks. 7 koin, koin skor 7+ diberi api,
+alasan (+/-) dari aturan skor di atas, SL referensi = SCREENER_SL_ATR x ATR(14) 4H, dan ukuran
+posisi untuk risiko SCREENER_RISK_USD. Bila file itu hilang atau gagal, otomatis dipakai kartu
+lama (render) supaya bot tidak berhenti.
 
 Pemakaian:
   python screener.py          # jalankan, kirim ke Telegram
   python screener.py --dry    # jalankan, simpan screener.png, tidak kirim
   python screener.py --mock   # data contoh (tanpa internet), simpan screener.png
 """
+import io
 import os
 import sys
 
 import requests
+from PIL import Image
 
 from common import (AMBER, GREEN, MUTED, RED, TRACK, TXT, W, Pen, font, now_wib, okx, pct,
                     send_photo, send_text, stamp)
 
+try:
+    from screener_image import build_caption as _cap_baru
+    from screener_image import render_screener as _render_baru
+except Exception as _e:  # noqa: BLE001
+    print(f"[warn] modul kartu baru tidak ada ({_e}); pakai kartu lama", file=sys.stderr)
+    _render_baru = _cap_baru = None
+
 TOP_N = 100
 STAGE2_N = 12
-SHOW_N = 5
 MIN_TECH = 3
 THREAD = ("screener",)  # nama topik di routes.json
 
@@ -54,7 +68,19 @@ def _int_env(name, default):
         return default
 
 
+def _float_env(name, default):
+    """Seperti _int_env tapi untuk angka desimal (boleh pakai koma)."""
+    try:
+        return float((os.environ.get(name) or "").strip().replace(",", ".") or default)
+    except ValueError:
+        return default
+
+
 MIN_SKOR = _int_env("SCREENER_MIN_SKOR", 5)
+SHOW_N = max(1, _int_env("SCREENER_SHOW_N", 7))
+RISK_USD = _float_env("SCREENER_RISK_USD", 1.0)      # risiko per trade untuk hitung ukuran posisi
+SL_ATR_MULT = _float_env("SCREENER_SL_ATR", 1.5)     # jarak SL referensi = pengali x ATR(14) 4H
+MKT_NAIK, MKT_TURUN = 2.0, -2.0                      # batas label pasar (perubahan total mcap 24 jam, %)
 
 EXCLUDE = {"USDT", "USDC", "DAI", "FDUSD", "USDE", "USDS", "TUSD", "PYUSD", "USD1", "USDD", "BUIDL",
            "STETH", "WSTETH", "WEETH", "WBTC", "WETH", "WBETH", "CBBTC", "CBETH", "SUSDE", "USDG",
@@ -99,6 +125,17 @@ def bull_cross(K, D, lookback=3, zone=40):
         if K[-1 - i] > D[-1 - i] and K[-2 - i] <= D[-2 - i] and K[-2 - i] < zone:
             return True
     return False
+
+
+def atr_pct(h, l, c, n=14):
+    """ATR(n) cara Wilder sebagai % dari close terakhir; None bila data kurang."""
+    if len(c) < n + 2 or not c[-1] or c[-1] <= 0:
+        return None
+    tr = [max(h[i] - l[i], abs(h[i] - c[i - 1]), abs(l[i] - c[i - 1])) for i in range(1, len(c))]
+    a = sum(tr[:n]) / n
+    for x in tr[n:]:
+        a = (a * (n - 1) + x) / n
+    return a / c[-1] * 100 if a > 0 else None
 
 
 # --------------------------------------------------------------------------
@@ -166,10 +203,14 @@ def analyze(sym, name, inst):
         return None
     k1, k4 = s1[0][-1], s4[0][-1]
     cross = bull_cross(*s4)
+    e13_ok, e21_ok = h4[2][-1] > e13[-1], d1[2][-1] > e21[-1]
     pts = (2 if k1 < 20 else 1 if k1 < 30 else 0) + (1 if k4 < 20 else 0) + (1 if cross else 0)
-    pts += (1 if h4[2][-1] > e13[-1] else 0) + (1 if d1[2][-1] > e21[-1] else 0)
+    pts += (1 if e13_ok else 0) + (1 if e21_ok else 0)
+    atr = atr_pct(*h4)
     return dict(sym=sym, name=name, inst=inst, k1d=k1, k4h=k4, tech=pts,
-                fund=None, oi=None, cvd=None, skor=pts)
+                fund=None, oi=None, cvd=None, skor=pts,
+                cross=cross, e13_ok=e13_ok, e21_ok=e21_ok,
+                sl_pct=(atr * SL_ATR_MULT) if atr else None)
 
 
 # --------------------------------------------------------------------------
@@ -203,6 +244,48 @@ def derivs(x):
     d += (1 if x["oi"] is not None and x["oi"] > 0 else 0)
     d += {"naik": 2, "datar": 1}.get(x["cvd"], 0)
     x["skor"] = max(1, min(10, x["tech"] + d))
+    x["reasons_pos"], x["reasons_neg"] = build_reasons(x)
+
+
+def build_reasons(x):
+    """Alasan (+/-) untuk kartu, diambil dari aturan skor yang sebenarnya. -> (pos, neg)."""
+    k1, k4 = x["k1d"], x["k4h"]
+    f, oi, cvd = x.get("fund"), x.get("oi"), x.get("cvd")
+    pos, neg = [], []
+    if k1 < 20 and k4 < 20:
+        pos.append("Stoch oversold di 1D dan 4H")
+    elif k1 < 20:
+        pos.append("Stoch oversold di 1D")
+    elif k1 < 30:
+        pos.append("Stoch 1D mendekati oversold")
+    elif k4 < 20:
+        pos.append("Stoch oversold di 4H")
+    if x.get("cross"):
+        pos.append("Stoch 4H menyilang naik (K di atas D)")
+    if f is not None and oi is not None and f < 0 and oi > 0:
+        pos.append("OI naik, funding negatif: short ramai, potensi squeeze")
+    else:
+        if f is not None and f <= 0:
+            pos.append("Funding ≤ 0: short ramai, bahan squeeze")
+        if oi is not None and oi > 0:
+            pos.append("OI 24 jam naik")
+    if cvd == "naik":
+        pos.append("CVD spot naik: ada pembeli nyata")
+    if x.get("e13_ok"):
+        pos.append("4H di atas EMA13: harga merebut kembali EMA cepat")
+    if x.get("e21_ok"):
+        pos.append("1D di atas EMA21: koreksi, belum breakdown")
+    if cvd == "turun":
+        neg.append("CVD spot turun: tekanan jual masih ada")
+    if x.get("e21_ok") is False:
+        neg.append("1D di bawah EMA21: risiko breakdown")
+    if oi is not None and oi <= -3:
+        neg.append("OI turun: posisi dilepas, tren belum berbalik")
+    if f is not None and f >= 0.05:
+        neg.append("Funding tinggi: long ramai")
+    if k1 >= 30:
+        neg.append("Stoch 1D belum oversold, entry bukan di dasar")
+    return pos, neg
 
 
 def run():
@@ -296,21 +379,85 @@ def caption(cands):
             "Skor 7+ = kandidat kuat. Pasang SL sebelum entry. Bukan nasihat finansial.")
 
 
+MKT_CATATAN = {"Naik": "Pasar condong naik. Tetap disiplin di SL.",
+               "Netral": "Belum ada arah tegas. Ukuran posisi kecil, tunggu konfirmasi.",
+               "Turun": "Pasar condong turun. Perkecil ukuran posisi dan hati-hati."}
+
+
+def market_card():
+    """Kondisi pasar dari CoinGecko /global: total mcap, BTC.D, USDT.D, label dari perubahan 24 jam.
+    None bila gagal (kartu tetap jadi tanpa strip pasar)."""
+    hdr = {"x-cg-demo-api-key": os.environ["COINGECKO_KEY"]} if os.environ.get("COINGECKO_KEY") else None
+    try:
+        r = requests.get("https://api.coingecko.com/api/v3/global", headers=hdr, timeout=20)
+        r.raise_for_status()
+        d = r.json()["data"]
+        ch = d.get("market_cap_change_percentage_24h_usd")
+        share = d.get("market_cap_percentage") or {}
+        label = "Netral"
+        if ch is not None:
+            label = "Naik" if ch >= MKT_NAIK else "Turun" if ch <= MKT_TURUN else "Netral"
+        note = MKT_CATATAN[label]
+        if ch is not None:
+            note = f"Total pasar 24 jam {pct(ch, 1)}. " + note
+        return {"mcap_usd": (d.get("total_market_cap") or {}).get("usd"), "btc_dom": share.get("btc"),
+                "usdt_dom": share.get("usdt"), "verdict": label, "note": note}
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] data pasar CoinGecko gagal ({e}); kartu tanpa strip pasar", file=sys.stderr)
+        return None
+
+
+def to_card(x):
+    """Ubah hasil analisis menjadi data untuk screener_image.py."""
+    return {"symbol": x["sym"], "name": x["name"], "score": x["skor"],
+            "stoch_1d": x["k1d"], "stoch_4h": x["k4h"],
+            "funding_pct": x["fund"], "oi_change_pct": x["oi"], "cvd": x["cvd"],
+            "reasons_pos": x.get("reasons_pos") or [], "reasons_neg": x.get("reasons_neg") or [],
+            "sl_pct": x.get("sl_pct"),
+            "sl_basis": f"{SL_ATR_MULT:g}".replace(".", ",") + "×ATR 4H"}
+
+
+def buat_kartu(cands, scanned, mkt):
+    """-> (gambar PIL, caption). Kartu baru; bila gagal, otomatis kartu lama."""
+    if _render_baru:
+        try:
+            cards = [to_card(x) for x in cands]
+            png = _render_baru(cards, mkt, scanned=scanned, risk_usd=RISK_USD, max_coins=SHOW_N)
+            if png:
+                img = Image.open(io.BytesIO(png))
+                img.load()
+                return img, _cap_baru(cards, mkt, max_coins=SHOW_N)
+        except Exception as e:  # noqa: BLE001
+            print(f"[warn] kartu baru gagal ({type(e).__name__}: {e}); pakai kartu lama", file=sys.stderr)
+    return render(cands, scanned), caption(cands)
+
+
 def mock():
-    rows = [("NEAR", "NEAR Protocol", 11, 17, -0.004, 3.2, "naik", 8),
-            ("HYPE", "Hyperliquid", 17, 22, 0.002, 1.8, "naik", 7),
-            ("TIA", "Celestia", 9, 14, -0.011, -0.6, "datar", 7),
-            ("ARB", "Arbitrum", 14, 25, 0.006, 0.9, "turun", 6),
-            ("RENDER", "Render", 19, 31, 0.001, 2.4, "naik", 6)]
-    return [dict(sym=a, name=b, k1d=c, k4h=d, fund=e, oi=f, cvd=g, skor=h) for a, b, c, d, e, f, g, h in rows], 78
+    rows = [("NEAR", "NEAR Protocol", 11, 17, -0.004, 3.2, "naik", 8, 4.6),
+            ("HYPE", "Hyperliquid", 17, 22, 0.002, 1.8, "naik", 7, 5.8),
+            ("TIA", "Celestia", 9, 14, -0.011, -0.6, "datar", 7, 6.1),
+            ("ARB", "Arbitrum", 14, 25, 0.006, 0.9, "turun", 6, 5.2),
+            ("RENDER", "Render", 19, 31, 0.001, 2.4, "naik", 6, 4.9),
+            ("ZEC", "Zcash", 11, 19, 0.010, -7.2, "naik", 5, 5.0),
+            ("BCH", "Bitcoin Cash", 10, 30, -0.017, -3.0, "datar", 5, 3.1)]
+    out = []
+    for a, b, c, d, e, f, g, h, sl in rows:
+        x = dict(sym=a, name=b, k1d=c, k4h=d, fund=e, oi=f, cvd=g, skor=h,
+                 cross=c < 12, e13_ok=True, e21_ok=h >= 7, sl_pct=sl)
+        x["reasons_pos"], x["reasons_neg"] = build_reasons(x)
+        out.append(x)
+    return out, 78
 
 
 def main():
     args = set(sys.argv[1:])
     if "--mock" in args:
         cands, scanned = mock()
+        mkt = {"mcap_usd": 2.47e12, "btc_dom": 60.3, "usdt_dom": 7.2, "verdict": "Netral",
+               "note": "Total pasar 24 jam −0,8%. " + MKT_CATATAN["Netral"]}
     else:
         cands, scanned = run()
+        mkt = market_card() if cands else None
 
     if not cands:
         msg = (f"Screener BUY {stamp(now_wib())}: tidak ada kandidat dengan skor ≥ {MIN_SKOR} "
@@ -320,8 +467,7 @@ def main():
             send_text(msg, THREAD)
         return
 
-    img = render(cands, scanned)
-    cap = caption(cands)
+    img, cap = buat_kartu(cands, scanned, mkt)
     if {"--dry", "--mock"} & args:
         img.save("screener.png")
         print("Disimpan: screener.png\n" + cap)

@@ -30,6 +30,13 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+try:
+    from ringkasan_image import build_caption as ringkasan_caption
+    from ringkasan_image import render_ringkasan
+except Exception as _e:  # noqa: BLE001
+    print(f"[warn] modul gambar ringkasan tidak ada ({_e}); ringkasan dikirim sebagai teks", file=sys.stderr)
+    render_ringkasan = ringkasan_caption = None
+
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
 CG_KEY = os.getenv("COINGECKO_API_KEY")
@@ -118,6 +125,37 @@ def send(text, topic, dry=False):
     r = requests.post(url, data=dict(base, chat_id=TG_CHAT), timeout=15)
     r.raise_for_status()
     time.sleep(0.4)
+
+
+def send_photo(png, caption, topic, dry=False):
+    """Kirim gambar PNG (bytes) ke topik grup; kalau gagal, coba chat pribadi.
+    True bila terkirim (atau tersimpan saat --dry-run); False bila gagal, supaya pemanggil kirim teks."""
+    if dry:
+        with open("narasi_ringkasan.png", "wb") as f:
+            f.write(png)
+        print("Disimpan: narasi_ringkasan.png\n" + caption + "\n" + "-" * 40)
+        return True
+    if not (TG_TOKEN and TG_CHAT):
+        return False
+    routes = load_json(ROUTES_FILE, {})
+    gid = routes.get("group")
+    thread = routes.get(topic) or (routes.get("intel") if topic == "narasi" else None)
+    targets = []
+    if gid and thread:
+        targets.append({"chat_id": gid, "message_thread_id": thread})
+    targets.append({"chat_id": TG_CHAT})
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+    for t in targets:
+        try:
+            r = requests.post(url, data=dict(t, caption=caption[:1024]),
+                              files={"photo": ("narasi.png", png, "image/png")}, timeout=60)
+            if r.status_code == 200:
+                time.sleep(0.4)
+                return True
+            print("kirim gambar gagal:", r.status_code, r.text[:200])
+        except Exception as e:
+            print("kirim gambar error:", type(e).__name__, e)
+    return False
 
 
 # ================================================================ skenario dampak event
@@ -426,7 +464,15 @@ def pretty(coin_id):
     return coin_id.replace("-", " ").title()
 
 
-def narasi_message(state):
+# Keranjang yang isinya hanya token pembungkus/staking (Wrapped stETH, WBTC, dll) bukan narasi nyata
+WRAP_RE = re.compile(r"wrapped|bridged|staked|restaked|\bsteth\b|\bweth\b|\bwbtc\b", re.I)
+
+
+def only_wrapped(coins):
+    return bool(coins) and all(WRAP_RE.search(c) for c in coins)
+
+
+def narasi_collect(state):
     cats = cg_get("/coins/categories")
     if not isinstance(cats, list):
         return None
@@ -443,8 +489,11 @@ def narasi_message(state):
             continue
         if not mc or ch is None or mc < 300e6 or vol < 30e6 or SKIP_CAT.search(c.get("name", "")):
             continue
+        coins = [pretty(x) for x in (c.get("top_3_coins_id") or [])[:3]]
+        if only_wrapped(coins):
+            continue
         valid.append({"id": c["id"], "name": c["name"], "ch": ch, "flow": vol / mc, "mc": mc,
-                      "coins": [pretty(x) for x in (c.get("top_3_coins_id") or [])[:3]]})
+                      "coins": coins})
     if not valid:
         return None
     hist = state.setdefault("narr_hist", {})
@@ -465,6 +514,18 @@ def narasi_message(state):
     hot = sorted(valid, key=lambda v: v["ch"], reverse=True)[:6]
     hot_ids = {v["id"] for v in hot}
     cold = [v for v in sorted(valid, key=lambda v: v["ch"]) if v["id"] not in hot_ids][:3]
+    names = []
+    tr = cg_get("/search/trending")
+    try:
+        names = [f"{c['item']['name']} ({c['item']['symbol']})" for c in tr["coins"][:7]]
+    except Exception:
+        pass
+    return {"mkt": mkt, "hot": hot, "cold": cold, "trending": names}
+
+
+def narasi_text(d):
+    """Versi teks ringkasan harian (cadangan kalau gambar gagal dibuat)."""
+    mkt, hot, cold, names = d["mkt"], d["hot"], d["cold"], d["trending"]
     rows = [f"<b>🧭 NARASI | RINGKASAN HARIAN</b> ({esc(datetime.now(WIB).strftime('%d %b %Y'))})"]
     if mkt is not None:
         rows.append(esc(f"Total pasar kripto 24 jam: {mkt:+.1f}%. Narasi dinilai terhadap angka ini."))
@@ -482,24 +543,42 @@ def narasi_message(state):
         rows += ["", "<b>NARASI DINGIN (24 jam)</b>"]
         for v in cold:
             rows.append(esc(f"• {v['name']}: {v['ch']:+.1f}%"))
-    tr = cg_get("/search/trending")
-    try:
-        names = [f"{c['item']['name']} ({c['item']['symbol']})" for c in tr["coins"][:7]]
+    if names:
         rows += ["", "<b>KOIN TRENDING DI COINGECKO</b>", esc(", ".join(names))]
-    except Exception:
-        pass
     rows += ["", "<i>" + esc("Cara baca: narasi yang naik berhari-hari dengan uang masuk besar lebih layak dipantau daripada "
                             "yang naik satu hari saja (sering cuma pump). Cek koinnya di screener dan hindari koin bervolume tipis.")
              + "</i>"]
     return "\n".join(rows)
 
 
+def narasi_gambar(d, dry=False):
+    """Kirim ringkasan harian sebagai gambar. True bila terkirim; False bila gagal (kirim teks)."""
+    if render_ringkasan is None:
+        return False
+    try:
+        mkt = d["mkt"]
+        hot = [{"name": v["name"], "ret_24h": v["ch"],
+                "vs_market": (v["ch"] - mkt) if mkt is not None else None,
+                "flow_pct": v["flow"] * 100, "coins": v["coins"],
+                "streak_days": v["streak"] if v["streak"] >= 3 else None} for v in d["hot"]]
+        cold = [{"name": v["name"], "ret_24h": v["ch"]} for v in d["cold"]]
+        png = render_ringkasan(hot, cold, d["trending"], market_24h=mkt)
+        if not png:
+            return False
+        cap = ringkasan_caption(hot, cold, mkt)
+    except Exception as e:
+        print("gambar ringkasan gagal:", type(e).__name__, e)
+        return False
+    return send_photo(png, cap, "narasi", dry)
+
+
 def check_narasi(state, dry):
     today = datetime.now(WIB).strftime("%Y-%m-%d")
     if datetime.now(WIB).hour >= NARASI_HOUR and state.get("narasi_date") != today:
-        msg = narasi_message(state)
-        if msg:
-            send(msg, "narasi", dry)
+        d = narasi_collect(state)
+        if d:
+            if not narasi_gambar(d, dry):
+                send(narasi_text(d), "narasi", dry)
             state["narasi_date"] = today
 
 
