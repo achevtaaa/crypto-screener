@@ -1,0 +1,122 @@
+{
+ "updated": "2026-11-13",
+ "coins": 60,
+ "tf": {
+  "4h": {
+   "baseline": {
+    "n": 10242,
+    "win": 0.3332356961530951,
+    "exp": -0.11145386367306098,
+    "se": 0.011510717084041529
+   },
+   "rows": {
+    "Stoch cross (metode lama)": {
+     "n": 2456,
+     "win": 0.3249185667752443,
+     "exp": -0.10943664272384293,
+     "se": 0.023284532031890848,
+     "verdict": "sedikit lebih baik, belum meyakinkan",
+     "icon": "\u2796"
+    },
+    "OB retest": {
+     "n": 884,
+     "win": 0.3167420814479638,
+     "exp": -0.13800336393306015,
+     "se": 0.03843860496656656,
+     "verdict": "belum lebih baik dari acak",
+     "icon": "\u274c"
+    },
+    "OB retest + Stoch cross": {
+     "n": 196,
+     "win": 0.3163265306122449,
+     "exp": -0.09104648185115774,
+     "se": 0.080437767766106,
+     "verdict": "sedikit lebih baik, belum meyakinkan",
+     "icon": "\u2796"
+    },
+    "OB + Stoch cross + EMA13>21": {
+     "n": 116,
+     "win": 0.35344827586206895,
+     "exp": -0.004195439834209151,
+     "se": 0.10760038726723256,
+     "verdict": "sedikit lebih baik, belum meyakinkan",
+     "icon": "\u2796"
+    },
+    "Divergence": {
+     "n": 854,
+     "win": 0.29859484777517564,
+     "exp": -0.21322027659231302,
+     "se": 0.03901632235776514,
+     "verdict": "belum lebih baik dari acak",
+     "icon": "\u274c"
+    },
+    "Divergence di zona OB + EMA13>21": {
+     "n": 23,
+     "win": 0.391304347826087,
+     "exp": -0.05262709271963505,
+     "se": 0.26141961752242004,
+     "verdict": "sampel kecil",
+     "icon": "\u2796"
+    }
+   }
+  },
+  "1d": {
+   "baseline": {
+    "n": 5545,
+    "win": 0.24111812443642922,
+    "exp": -0.07461216571004262,
+    "se": 0.013894565373629816
+   },
+   "rows": {
+    "Stoch cross (metode lama)": {
+     "n": 1499,
+     "win": 0.2314876584389593,
+     "exp": -0.005106054601189074,
+     "se": 0.0258735586152423,
+     "verdict": "sedikit lebih baik, belum meyakinkan",
+     "icon": "\u2796"
+    },
+    "OB retest": {
+     "n": 526,
+     "win": 0.188212927756654,
+     "exp": -0.13449718566698013,
+     "se": 0.04209352823233055,
+     "verdict": "belum lebih baik dari acak",
+     "icon": "\u274c"
+    },
+    "OB retest + Stoch cross": {
+     "n": 170,
+     "win": 0.2529411764705882,
+     "exp": 0.10097861086704607,
+     "se": 0.07556865948106199,
+     "verdict": "lebih baik dari acak (selisih cukup besar)",
+     "icon": "\u2705"
+    },
+    "OB + Stoch cross + EMA13>21": {
+     "n": 101,
+     "win": 0.27722772277227725,
+     "exp": 0.20183215132795052,
+     "se": 0.09636890747059723,
+     "verdict": "lebih baik dari acak (selisih cukup besar)",
+     "icon": "\u2705"
+    },
+    "Divergence": {
+     "n": 458,
+     "win": 0.23580786026200873,
+     "exp": -0.024550173002341955,
+     "se": 0.04709927340047444,
+     "verdict": "sedikit lebih baik, belum meyakinkan",
+     "icon": "\u2796"
+    },
+    "Divergence di zona OB + EMA13>21": {
+     "n": 8,
+     "win": 0.375,
+     "exp": 0.1209925736754582,
+     "se": 0.4405542748899165,
+     "verdict": "sampel kecil",
+     "icon": "\u2796"
+    }
+   }
+  }
+ }
+}
