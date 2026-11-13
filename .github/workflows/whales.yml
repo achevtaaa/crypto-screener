@@ -2,7 +2,7 @@ name: Whale and News
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # cek tiap 10 menit (GitHub kadang telat beberapa menit)
+    - cron: "*/10 * * * *"   # cek tiap 10 menit (GitHub kadang telat beberapa menit)
   workflow_dispatch:         # tombol "Run workflow" untuk tes manual
 
 permissions:
@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
+      - run: pip install requests pillow
 
       - name: Jalankan whale dan news
         run: python whales.py

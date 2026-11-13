@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
+      - run: pip install requests pillow
 
       - name: Jalankan uji Order Block dan divergence
         run: python backtest_ob.py
