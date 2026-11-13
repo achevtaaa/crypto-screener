@@ -34,6 +34,11 @@ NARASI = [
     ("perpetuals", "📊", "Perp DEX"),
 ]
 _INFO = {cid: (emo, nama) for cid, emo, nama in NARASI}
+
+# Aset digital yang disebut SEC / staf SEC (dasar opsi ETF Nasdaq ISE, rilis SEC 34-106863, 10 Nov 2026).
+# Bukan persetujuan produk ETF tertentu. CC = Canton Coin, LBC = LBRY Credits.
+SEC_SET = {"BTC", "ETH", "SOL", "CC", "HBAR", "LINK", "AVAX", "ADA", "XLM", "DOT", "LTC", "DOGE", "BCH", "APT",
+           "XTZ", "SHIB", "ALGO", "LBC", "XRP"}
 _map = None
 _cache = {}
 
@@ -83,6 +88,8 @@ def narasi_label(base, limit=3):
     """base = simbol koin, contoh 'RENDER'. Mengembalikan '' kalau tidak ada data."""
     ids = _load().get("map", {}).get(str(base).upper(), [])
     parts = [f"{_INFO[i][0]} {_INFO[i][1]}" for i in ids if i in _INFO][:limit]
+    if str(base).upper() in SEC_SET:
+        parts.append("📜 Daftar SEC")
     return " | ".join(parts)
 
 

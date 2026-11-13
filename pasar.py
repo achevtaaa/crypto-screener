@@ -31,11 +31,9 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 try:
-    from ringkasan_image import build_caption as ringkasan_caption
-    from ringkasan_image import render_ringkasan
-except Exception as _e:  # noqa: BLE001
-    print(f"[warn] modul gambar ringkasan tidak ada ({_e}); ringkasan dikirim sebagai teks", file=sys.stderr)
-    render_ringkasan = ringkasan_caption = None
+    import lampu_kartu
+except Exception:             # Pillow / file lampu_kartu.py belum ada: pakai pesan teks
+    lampu_kartu = None
 
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
@@ -125,37 +123,6 @@ def send(text, topic, dry=False):
     r = requests.post(url, data=dict(base, chat_id=TG_CHAT), timeout=15)
     r.raise_for_status()
     time.sleep(0.4)
-
-
-def send_photo(png, caption, topic, dry=False):
-    """Kirim gambar PNG (bytes) ke topik grup; kalau gagal, coba chat pribadi.
-    True bila terkirim (atau tersimpan saat --dry-run); False bila gagal, supaya pemanggil kirim teks."""
-    if dry:
-        with open("narasi_ringkasan.png", "wb") as f:
-            f.write(png)
-        print("Disimpan: narasi_ringkasan.png\n" + caption + "\n" + "-" * 40)
-        return True
-    if not (TG_TOKEN and TG_CHAT):
-        return False
-    routes = load_json(ROUTES_FILE, {})
-    gid = routes.get("group")
-    thread = routes.get(topic) or (routes.get("intel") if topic == "narasi" else None)
-    targets = []
-    if gid and thread:
-        targets.append({"chat_id": gid, "message_thread_id": thread})
-    targets.append({"chat_id": TG_CHAT})
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
-    for t in targets:
-        try:
-            r = requests.post(url, data=dict(t, caption=caption[:1024]),
-                              files={"photo": ("narasi.png", png, "image/png")}, timeout=60)
-            if r.status_code == 200:
-                time.sleep(0.4)
-                return True
-            print("kirim gambar gagal:", r.status_code, r.text[:200])
-        except Exception as e:
-            print("kirim gambar error:", type(e).__name__, e)
-    return False
 
 
 # ================================================================ skenario dampak event
@@ -429,6 +396,61 @@ def light_message(level, notes, snap, soon, brief):
     return "\n".join(lines)
 
 
+HARI_PENDEK = {"Mon": "Sen", "Tue": "Sel", "Wed": "Rab", "Thu": "Kam", "Fri": "Jum", "Sat": "Sab", "Sun": "Min"}
+
+
+def event_rows(soon):
+    rows = []
+    for ev in soon[:4]:
+        try:
+            t = parse_event_time(ev["date"]).astimezone(WIB)
+            mins = int((t - datetime.now(WIB)).total_seconds() / 60)
+        except Exception:
+            continue
+        eta = f"dalam {mins // 60} jam" if mins >= 60 else f"dalam {max(mins, 1)} menit"
+        rows.append({"title": ev["title"], "forecast": ev.get("forecast"), "previous": ev.get("previous"),
+                     "when": f"{HARI_PENDEK.get(t.strftime('%a'), t.strftime('%a'))} {t.strftime('%H:%M')} WIB", "eta": eta})
+    return rows
+
+
+def send_photo(png, caption, topic):
+    """Kirim gambar ke topik grup (routes.json); kalau gagal, ke chat pribadi."""
+    routes = load_json(ROUTES_FILE, {})
+    gid = routes.get("group")
+    thread = routes.get(topic)
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
+    base = {"caption": caption[:1000], "parse_mode": "HTML"}
+    files = lambda: {"photo": ("lampu.png", png, "image/png")}
+    if gid and thread:
+        r = requests.post(url, data=dict(base, chat_id=gid, message_thread_id=thread), files=files(), timeout=30)
+        if r.status_code == 200:
+            return True
+        print("kirim gambar ke topik gagal:", r.status_code, "-> kirim ke chat pribadi")
+    r = requests.post(url, data=dict(base, chat_id=TG_CHAT), files=files(), timeout=30)
+    return r.status_code == 200
+
+
+def send_light(level, notes, snap, soon, brief, dry):
+    """Kartu gambar kalau bisa; kalau tidak, pesan teks lama."""
+    png = None
+    if lampu_kartu is not None:
+        png = lampu_kartu.render(level, notes, snap, event_rows(soon) if brief else [], brief)
+    if png and dry:
+        with open("lampu_preview.png", "wb") as f:
+            f.write(png)
+        print("kartu lampu disimpan ke lampu_preview.png\n" + "-" * 40)
+    elif png and TG_TOKEN and TG_CHAT:
+        icon, _ = LIGHT[level]
+        title = "PAGI" if brief else "STATUS BERUBAH"
+        cap = f"<b>💸 PASAR | LAMPU LALU LINTAS {icon} {level} ({title})</b>"
+        try:
+            if send_photo(png, cap, "pasar"):
+                return
+        except Exception as e:
+            print("kirim gambar gagal:", type(e).__name__)
+    send(light_message(level, notes, snap, soon, brief), "pasar", dry)
+
+
 def check_market(state, events, dry):
     snap = market_snapshot(state)
     level, notes, soon = assess(snap, events)
@@ -437,10 +459,10 @@ def check_market(state, events, dry):
     brief_due = datetime.now(WIB).hour >= BRIEF_HOUR and state.get("brief_date") != today
     changed = last is not None and level != last
     if brief_due:
-        send(light_message(level, notes, snap, soon, True), "pasar", dry)
+        send_light(level, notes, snap, soon, True, dry)
         state["brief_date"] = today
     elif changed:
-        send(light_message(level, notes, snap, soon, False), "pasar", dry)
+        send_light(level, notes, snap, soon, False, dry)
     state["level"] = level
 
 
@@ -464,15 +486,7 @@ def pretty(coin_id):
     return coin_id.replace("-", " ").title()
 
 
-# Keranjang yang isinya hanya token pembungkus/staking (Wrapped stETH, WBTC, dll) bukan narasi nyata
-WRAP_RE = re.compile(r"wrapped|bridged|staked|restaked|\bsteth\b|\bweth\b|\bwbtc\b", re.I)
-
-
-def only_wrapped(coins):
-    return bool(coins) and all(WRAP_RE.search(c) for c in coins)
-
-
-def narasi_collect(state):
+def narasi_message(state):
     cats = cg_get("/coins/categories")
     if not isinstance(cats, list):
         return None
@@ -489,11 +503,8 @@ def narasi_collect(state):
             continue
         if not mc or ch is None or mc < 300e6 or vol < 30e6 or SKIP_CAT.search(c.get("name", "")):
             continue
-        coins = [pretty(x) for x in (c.get("top_3_coins_id") or [])[:3]]
-        if only_wrapped(coins):
-            continue
         valid.append({"id": c["id"], "name": c["name"], "ch": ch, "flow": vol / mc, "mc": mc,
-                      "coins": coins})
+                      "coins": [pretty(x) for x in (c.get("top_3_coins_id") or [])[:3]]})
     if not valid:
         return None
     hist = state.setdefault("narr_hist", {})
@@ -514,18 +525,6 @@ def narasi_collect(state):
     hot = sorted(valid, key=lambda v: v["ch"], reverse=True)[:6]
     hot_ids = {v["id"] for v in hot}
     cold = [v for v in sorted(valid, key=lambda v: v["ch"]) if v["id"] not in hot_ids][:3]
-    names = []
-    tr = cg_get("/search/trending")
-    try:
-        names = [f"{c['item']['name']} ({c['item']['symbol']})" for c in tr["coins"][:7]]
-    except Exception:
-        pass
-    return {"mkt": mkt, "hot": hot, "cold": cold, "trending": names}
-
-
-def narasi_text(d):
-    """Versi teks ringkasan harian (cadangan kalau gambar gagal dibuat)."""
-    mkt, hot, cold, names = d["mkt"], d["hot"], d["cold"], d["trending"]
     rows = [f"<b>🧭 NARASI | RINGKASAN HARIAN</b> ({esc(datetime.now(WIB).strftime('%d %b %Y'))})"]
     if mkt is not None:
         rows.append(esc(f"Total pasar kripto 24 jam: {mkt:+.1f}%. Narasi dinilai terhadap angka ini."))
@@ -543,42 +542,24 @@ def narasi_text(d):
         rows += ["", "<b>NARASI DINGIN (24 jam)</b>"]
         for v in cold:
             rows.append(esc(f"• {v['name']}: {v['ch']:+.1f}%"))
-    if names:
+    tr = cg_get("/search/trending")
+    try:
+        names = [f"{c['item']['name']} ({c['item']['symbol']})" for c in tr["coins"][:7]]
         rows += ["", "<b>KOIN TRENDING DI COINGECKO</b>", esc(", ".join(names))]
+    except Exception:
+        pass
     rows += ["", "<i>" + esc("Cara baca: narasi yang naik berhari-hari dengan uang masuk besar lebih layak dipantau daripada "
                             "yang naik satu hari saja (sering cuma pump). Cek koinnya di screener dan hindari koin bervolume tipis.")
              + "</i>"]
     return "\n".join(rows)
 
 
-def narasi_gambar(d, dry=False):
-    """Kirim ringkasan harian sebagai gambar. True bila terkirim; False bila gagal (kirim teks)."""
-    if render_ringkasan is None:
-        return False
-    try:
-        mkt = d["mkt"]
-        hot = [{"name": v["name"], "ret_24h": v["ch"],
-                "vs_market": (v["ch"] - mkt) if mkt is not None else None,
-                "flow_pct": v["flow"] * 100, "coins": v["coins"],
-                "streak_days": v["streak"] if v["streak"] >= 3 else None} for v in d["hot"]]
-        cold = [{"name": v["name"], "ret_24h": v["ch"]} for v in d["cold"]]
-        png = render_ringkasan(hot, cold, d["trending"], market_24h=mkt)
-        if not png:
-            return False
-        cap = ringkasan_caption(hot, cold, mkt)
-    except Exception as e:
-        print("gambar ringkasan gagal:", type(e).__name__, e)
-        return False
-    return send_photo(png, cap, "narasi", dry)
-
-
 def check_narasi(state, dry):
     today = datetime.now(WIB).strftime("%Y-%m-%d")
     if datetime.now(WIB).hour >= NARASI_HOUR and state.get("narasi_date") != today:
-        d = narasi_collect(state)
-        if d:
-            if not narasi_gambar(d, dry):
-                send(narasi_text(d), "narasi", dry)
+        msg = narasi_message(state)
+        if msg:
+            send(msg, "narasi", dry)
             state["narasi_date"] = today
 
 

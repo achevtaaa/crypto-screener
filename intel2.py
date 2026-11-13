@@ -56,7 +56,12 @@ DORM_MAX_7D = 25.0                       # naik 7 hari <= 25% (belum terlambat)
 DORM_MAX_RATIO = 8.0                     # lonjakan >= 8x justru jelek di backtest, dilewati
 TOKENIZED_BLOCK = {"XQQQ", "XMU"}        # aset saham/ETF yang dibuat token, bukan koin kripto
 DORM_COOLDOWN_H = 72
+DORM_SUMMARY_HOUR = 8                    # laporan pemindai harian dikirim sekali, setelah jam ini (WIB)
 DORM_MAX_ALERTS = 3
+
+# --- koin daftar SEC
+SEC_MOVE = 10.0                          # % perubahan harga 24 jam yang dianggap kejadian
+SEC_COOLDOWN_H = 12
 
 # --- wallet pantauan
 ETHPLORER = "https://api.ethplorer.io"
@@ -200,12 +205,33 @@ def looks_tokenized(raw):
     return med(wk) > 0 and med(we) < 0.2 * med(wk)
 
 
+def dorm_summary(fn):
+    """Satu pesan singkat per hari: berapa koin diperiksa dan kenapa yang lain tidak lolos."""
+    order = ["diperiksa", "saham token (dibuang)", "volume naik 4x+", "bukan sideways", "harga 24j di luar -4%..+10%",
+             "sudah naik >25% seminggu", "CVD belum mendukung", "ada tanda bandar", "lonjakan 8x+ (terlalu ekstrem)", "LOLOS"]
+    names = {"diperiksa": "Koin diperiksa", "volume naik 4x+": "Volume naik 4x atau lebih", "LOLOS": "Lolos semua filter"}
+    lines = ["<b>💤 KOIN BANGUN TIDUR 💤</b>", "<b>Laporan pemindai (pemindaian terakhir)</b>"]
+    for k in order:
+        if k in fn:
+            lines.append(esc(f"{names.get(k, 'Gugur: ' + k)}: {fn[k]}"))
+    if not fn.get("LOLOS"):
+        lines.append("<i>" + esc("Tidak ada koin yang lolos hari ini. Itu normal: filternya ketat, dan di pasar yang takut "
+                                 "(Extreme Fear) tekanan beli jarang kuat.") + "</i>")
+    return "\n".join(lines)
+
+
 def check_dormant(tick, state):
     last = state.get("dormant_scan")
     if hours_since(last) < DORM_EVERY_H:
         return []
     state["dormant_scan"] = time.time()
     cool = state.setdefault("dormant", {})
+    fn = state["dorm_funnel"] = {}                      # hitungan pemindaian ini: kenapa koin tidak lolos
+    today = datetime.now(WIB).strftime("%Y-%m-%d")
+
+    def cnt(key):
+        fn[key] = fn.get(key, 0) + 1
+
     uni = sorted(((b, t) for b, t in tick.items() if not S.excluded(b) and t["vol"] >= DORM_MIN_VOL),
                  key=lambda x: x[1]["vol"], reverse=True)[:DORM_TOP]
     hits = []
@@ -216,7 +242,9 @@ def check_dormant(tick, state):
         time.sleep(0.15)
         if not raw or len(raw) < 60:
             continue
+        cnt("diperiksa")
         if base in TOKENIZED_BLOCK or looks_tokenized(raw):
+            cnt("saham token (dibuang)")
             continue
         c = [x[:4] for x in raw]
         vols = sorted(x[3] for x in c[-60:-3])
@@ -226,22 +254,38 @@ def check_dormant(tick, state):
         ratio = t["vol"] / med
         if ratio < DORM_RATIO:
             continue
+        cnt("volume naik 4x+")
         hi, lo = max(x[0] for x in c[-30:]), min(x[1] for x in c[-30:])
         rng = hi / lo - 1 if lo > 0 else 9
         if rng > DORM_MAX_RANGE:
+            cnt("bukan sideways")
             continue
         if not (DORM_CHG_MIN <= t["chg"] <= DORM_CHG_MAX):
+            cnt("harga 24j di luar -4%..+10%")
             continue
         chg7 = (t["last"] / c[-7][2] - 1) * 100 if c[-7][2] else 0
         if chg7 > DORM_MAX_7D:
+            cnt("sudah naik >25% seminggu")
             continue
         cvd = S.cvd_proxy(c, 5)[0]
-        if cvd < S.CVD_POSITIVE or S.risk_flags(c, 0) or ratio >= DORM_MAX_RATIO:
-            continue                                  # sama dengan syarat uji historis: CVD+, tanpa tanda bandar, bukan lonjakan ekstrem
+        if cvd < S.CVD_POSITIVE:
+            cnt("CVD belum mendukung")
+            continue
+        if S.risk_flags(c, 0):
+            cnt("ada tanda bandar")
+            continue
+        if ratio >= DORM_MAX_RATIO:
+            cnt("lonjakan 8x+ (terlalu ekstrem)")
+            continue
+        cnt("LOLOS")                                  # syarat sama dengan uji historis: CVD+, tanpa tanda bandar, bukan lonjakan ekstrem
         risk = S.risk_flags(c, t["vol"])              # untuk tampilan: peringatan likuiditas tipis tetap ditampilkan
         hits.append((ratio, base, t, med, rng, chg7, cvd, risk))
     hits.sort(reverse=True, key=lambda x: x[0])
     out = []
+    print("pemindai koin bangun tidur:", fn)
+    if datetime.now(WIB).hour >= DORM_SUMMARY_HOUR and state.get("dorm_summary_day") != today:
+        state["dorm_summary_day"] = today
+        out.append(dorm_summary(fn))
     for ratio, base, t, med, rng, chg7, cvd, risk in hits[:DORM_MAX_ALERTS]:
         cool[base] = time.time()
         support = cvd >= S.CVD_POSITIVE
@@ -335,6 +379,24 @@ def check_wallets(tick, state):
     return out
 
 
+def check_sec_watch(tick, state):
+    """Koin di daftar aset digital SEC (rilis 34-106863): alert kalau bergerak tajam dalam 24 jam."""
+    sec = bantu.SEC_SET if bantu else set()
+    out, cool = [], state.setdefault("sec", {})
+    for base in sorted(sec):
+        t = tick.get(base)
+        if not t or abs(t["chg"]) < SEC_MOVE:
+            continue
+        key = f"{base}:{'naik' if t['chg'] > 0 else 'turun'}"
+        if hours_since(cool.get(key)) < SEC_COOLDOWN_H:
+            continue
+        cool[key] = time.time()
+        out.append(f"<b>📜 DAFTAR ASET SEC 📜</b>\n<b><u>{esc(base)}</u></b> {'naik' if t['chg'] > 0 else 'turun'} "
+                   f"<b>{t['chg']:+.1f}%</b> dalam 24 jam | harga {t['last']:g} | volume {money(t['vol'])}\n"
+                   f"<i>{esc('Koin ini termasuk aset digital yang disebut SEC (dasar opsi ETF di Nasdaq ISE). Itu belum berarti ETF-nya sudah ada, dan gerakan harga belum tentu karena kabar ini.')}</i>")
+    return out
+
+
 # ================================================================ main
 def main():
     dry = "--dry-run" in sys.argv
@@ -353,6 +415,7 @@ def main():
     if tick:
         mods += [("funding", lambda: check_funding(tick, state)),
                  ("dormant", lambda: check_dormant(tick, state)),
+                 ("sec", lambda: check_sec_watch(tick, state)),
                  ("wallets", lambda: check_wallets(tick, state))]
     else:
         print("OKX tidak bisa diakses:", err)

@@ -81,6 +81,9 @@ PEOPLE = [
     (r"\btether\b|\bardoino\b|\bcircle\b", "Tether/Circle", 2, False),
     (r"\belon\b|\bmusk\b", "Elon Musk", 2, False),
     (r"\bhack(ed|s)?\b|\bexploit(ed|s)?\b|\bdrained\b|\bstolen\b", "HACK/EXPLOIT", 3, False),
+    # berita ETF / opsi yang menyebut koin di daftar aset digital SEC (selain BTC dan ETH yang sudah terpantau)
+    (r"(?=.*\b(?:ETFs?|ETPs?|options)\b)(?=.*\b(?:Solana|XRP|Ripple|Cardano|Dogecoin|Litecoin|Hedera|HBAR|Chainlink|"
+     r"Avalanche|Polkadot|Stellar|Aptos|Tezos|Algorand|Shiba|Canton|LBRY|Bitcoin Cash)\b)", "ETF/Opsi koin SEC", 2, False),
 ]
 MAX_ALERTS_PER_RUN = 12
 NEWS_MIN_WEIGHT = 2
@@ -325,6 +328,7 @@ IMPACT = {
     "Coinbase": "Listing di Coinbase biasanya pump singkat. Masalah hukum atau keamanan menekan sentimen.",
     "Tether/Circle": "Isu cadangan stablecoin memengaruhi kepercayaan pasar. Penerbitan baru yang besar sering dibaca sebagai masuknya likuiditas.",
     "Elon Musk": "Pernyataan Musk bisa memicu lonjakan jangka pendek di koin meme, sering berbalik cepat.",
+    "ETF/Opsi koin SEC": "Produk ETF atau opsi baru untuk sebuah koin membuka pintu dana institusi, tapi baru terasa setelah produknya benar-benar listing dan ada arus dana. Berita saja sering sudah masuk harga.",
     "HACK/EXPLOIT": "Biasanya negatif untuk token atau protokol terkait dan sentimen DeFi. Pantau jumlah dana, ada tidaknya perbaikan, dan bursa yang menghentikan deposit.",
 }
 
