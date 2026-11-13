@@ -33,7 +33,7 @@ from datetime import datetime, timezone
 
 import requests
 
-import screener as S
+import inti as S
 
 BT_COINS = 60
 FEE = 0.00055                      # per sisi (taker)

@@ -22,7 +22,7 @@ from datetime import datetime, timezone, timedelta
 
 import requests
 
-import screener as S
+import inti as S
 
 try:
     import bantu

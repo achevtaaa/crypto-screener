@@ -17,7 +17,7 @@ import sys
 from datetime import datetime, timezone
 
 import backtest as B
-import screener as S
+import inti as S
 
 BT_COINS = 80
 WANT = 900                         # candle 1D per koin (sekitar 2,5 tahun)

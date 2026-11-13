@@ -39,7 +39,7 @@ import sys
 from datetime import datetime, timezone
 
 import backtest as B
-import screener as S
+import inti as S
 
 BT_COINS = 60
 TF_CFG = {"4h": ("4H", 4 * 3600_000, 1200, 24), "1d": ("1D", B.DAY_MS, 900, 10)}
