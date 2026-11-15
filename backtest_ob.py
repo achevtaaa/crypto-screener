@@ -41,6 +41,11 @@ from datetime import datetime, timezone
 import backtest as B
 import inti as S
 
+try:
+    import kartu_teks as K
+except Exception:
+    K = None
+
 BT_COINS = 60
 TF_CFG = {"4h": ("4H", 4 * 3600_000, 1200, 24), "1d": ("1D", B.DAY_MS, 900, 10)}
 IMPULSE_ATR = 1.5
@@ -193,8 +198,8 @@ def telegram_text(rep):
                                             if good else
                                             "Belum ada metode OB / divergence yang terbukti lebih baik dari acak. "
                                             "Jangan jadikan dasar entry.")) + "</i>",
-              e("✅ lebih baik dari acak dengan selisih >= 2x galat baku (n >= 30) | ➖ sampel kecil atau belum meyakinkan | ❌ belum lebih baik. "
-                "Koin yang diuji adalah top sekarang (bias survivorship). Masa lalu tidak menjamin masa depan.")]
+              "<i>" + e("Titik hijau = lebih baik dari acak dengan selisih >= 2x galat baku (n >= 30). Abu-abu = sampel kecil atau belum meyakinkan. "
+                "Merah = belum lebih baik. Koin yang diuji adalah top sekarang (bias survivorship). Masa lalu tidak menjamin masa depan.") + "</i>"]
     return "\n".join(lines)
 
 
@@ -223,8 +228,11 @@ def main():
     if dry or not (S.TG_TOKEN and S.TG_CHAT):
         print(msg)
     else:
-        for part in S.split_for_telegram(msg):
-            S.send_routed(part, "screener")
+        if K:
+            K.kirim(S, msg, "screener")
+        else:
+            for part in S.split_for_telegram(msg):
+                S.send_routed(part, "screener")
 
 
 if __name__ == "__main__":

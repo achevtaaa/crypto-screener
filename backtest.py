@@ -35,6 +35,11 @@ import requests
 
 import inti as S
 
+try:
+    import kartu_teks as K
+except Exception:
+    K = None
+
 BT_COINS = 60
 FEE = 0.00055                      # per sisi (taker)
 ATR_N = 14
@@ -232,7 +237,7 @@ def main():
     tick, err = S.okx_tickers()
     if not tick:
         msg = f"<b>Backtest error:</b> OKX tidak bisa diakses ({S.esc(err)})"
-        print(msg) if dry or not (S.TG_TOKEN and S.TG_CHAT) else S.send_telegram(msg)
+        print(msg) if dry or not (S.TG_TOKEN and S.TG_CHAT) else (K.kirim(S, msg, 'screener') if K else S.send_telegram(msg))
         return
     ranked = sorted(((b, t) for b, t in tick.items() if not S.excluded(b)),
                     key=lambda x: x[1]["vol"], reverse=True)[:BT_COINS]
@@ -257,7 +262,7 @@ def main():
     if dry or not (S.TG_TOKEN and S.TG_CHAT):
         print(msg)
     else:
-        S.send_telegram(msg)
+        K.kirim(S, msg, 'screener') if K else S.send_telegram(msg)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,10 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 try:
+    import kartu_teks as K
+except Exception:
+    K = None
+try:
     import lampu_kartu
 except Exception:             # Pillow / file lampu_kartu.py belum ada: pakai pesan teks
     lampu_kartu = None
@@ -123,6 +127,20 @@ def send(text, topic, dry=False):
     r = requests.post(url, data=dict(base, chat_id=TG_CHAT), timeout=15)
     r.raise_for_status()
     time.sleep(0.4)
+
+
+def send_card(msg, topic, dry=False):
+    """Kirim pesan sebagai kartu gambar (isi lengkap, otomatis beberapa halaman kalau panjang); gagal -> teks."""
+    if K is None:
+        send(msg, topic, dry)
+        return
+    if dry or not (TG_TOKEN and TG_CHAT):
+        print(msg + "\n" + "-" * 40)
+        K.simpan_contoh(msg, f"{topic}_preview.png", topic)
+        return
+    import types
+    K.kirim(types.SimpleNamespace(TG_TOKEN=TG_TOKEN, TG_CHAT=TG_CHAT), msg, topic,
+            fallback=lambda h: send(h, topic))
 
 
 # ================================================================ skenario dampak event
@@ -559,7 +577,7 @@ def check_narasi(state, dry):
     if datetime.now(WIB).hour >= NARASI_HOUR and state.get("narasi_date") != today:
         msg = narasi_message(state)
         if msg:
-            send(msg, "narasi", dry)
+            send_card(msg, "narasi", dry)
             state["narasi_date"] = today
 
 

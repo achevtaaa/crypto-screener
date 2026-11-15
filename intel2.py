@@ -28,6 +28,10 @@ try:
     import bantu
 except ImportError:
     bantu = None
+try:
+    import kartu_teks as K
+except Exception:
+    K = None
 
 STATE_FILE = "intel2_state.json"
 WALLET_FILE = "wallets.json"
@@ -397,6 +401,76 @@ def check_sec_watch(tick, state):
     return out
 
 
+# ================================================================ kandidat OB 1D (hasil uji awal)
+OB_STATE_HOUR_UTC = 17          # candle 1D OKX tutup 16:00 UTC; pindai sekali sehari setelah itu
+OB_COOLDOWN_D = 5
+OB_MAX_ALERTS = 3
+OB_NAMES = ("OB retest + Stoch cross", "OB + Stoch cross + EMA13>21")
+
+
+def check_ob_1d(tick, state):
+    """Sekali sehari: cari koin yang BARU membentuk pola OB retest + Stoch cross di candle harian (1D).
+    Ini kandidat dari uji historis (backtest_ob.py), BELUM terbukti: pakai SL dan risiko kecil."""
+    try:
+        import backtest as B
+        import backtest_ob as OB
+    except Exception as e:
+        print("modul OB tidak tersedia:", type(e).__name__)
+        return []
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    st = state.setdefault("ob1d", {"day": "", "cool": {}})
+    if st.get("day") == today or now.hour < OB_STATE_HOUR_UTC:
+        return []
+    ranked = sorted(((t["vol"], b, t["id"]) for b, t in tick.items()
+                     if not S.excluded(b) and b not in TOKENIZED_BLOCK), reverse=True)[:OB.BT_COINS]
+    out, fetched = [], 0
+    for _, base, inst in ranked:
+        try:
+            c = B.fetch_history(inst, "1D", 150)
+            if len(c) < 80 or now.timestamp() * 1000 - c[-1][0] > 50 * 3600_000:
+                continue
+            fetched += 1
+            idx = len(c) - 1
+            sig, (_, highs, lows, closes) = OB.detect(c + [c[-1]])      # candle terakhir = baru tutup
+            names = [v for v in OB_NAMES if idx in sig[v]]
+            if not names:
+                continue
+            last = st["cool"].get(base)
+            if last and (now.timestamp() - last) < OB_COOLDOWN_D * 86400:
+                continue
+            a = B.atr(highs, lows, closes, idx)
+            close = closes[idx]
+            if a <= 0 or close <= 0:
+                continue
+            sl, tp = close - 1.5 * a, close + 2.25 * a
+            risk = 1.5 * a / close * 100
+            pos = 1.0 / (risk / 100)
+            strong = OB_NAMES[1] in names
+            tag = ""
+            if bantu:
+                try:
+                    tag = bantu.narasi_label(base, 2)
+                except Exception:
+                    tag = ""
+            out.append(("screener",
+                        f"<b>🧱 KANDIDAT OB 1D 🧱</b>\n"
+                        f"<b><u>{esc(base)}</u></b>" + (f"  🏷️ {esc(tag)}" if tag else "") + "\n"
+                        f"📍 Pola: OB retest + Stoch cross naik" + (" + EMA13 di atas EMA21 (versi terkuat)" if strong else "") + "\n"
+                        f"💰 Harga tutup {close:g} | SL {sl:g} (-{risk:.1f}%) | TP {tp:g} (+{2.25 * a / close * 100:.1f}%)\n"
+                        f"🎯 Risiko $1 = posisi sekitar ${pos:,.0f} (jarak SL {risk:.1f}%)\n"
+                        f"<i>{esc('Uji awal 60 koin di 1D: rata-rata +0.10R sampai +0.20R, menang sekitar 25 sampai 28%. Ini kandidat, belum terbukti. Tetap pasang SL, kira-kira 7 dari 10 trade bisa kena SL.')}</i>"))
+            st["cool"][base] = now.timestamp()
+            if len(out) >= OB_MAX_ALERTS:
+                fetched = max(fetched, 20)          # batas harian tercapai: jangan pindai lagi hari ini
+                break
+        except Exception as e:
+            print("ob1d skip", base, type(e).__name__)
+    if fetched >= 20:
+        st["day"] = today
+    return out
+
+
 # ================================================================ main
 def main():
     dry = "--dry-run" in sys.argv
@@ -416,7 +490,8 @@ def main():
         mods += [("funding", lambda: check_funding(tick, state)),
                  ("dormant", lambda: check_dormant(tick, state)),
                  ("sec", lambda: check_sec_watch(tick, state)),
-                 ("wallets", lambda: check_wallets(tick, state))]
+                 ("wallets", lambda: check_wallets(tick, state)),
+                 ("ob1d", lambda: check_ob_1d(tick, state))]
     else:
         print("OKX tidak bisa diakses:", err)
     for name, fn in mods:
@@ -428,11 +503,16 @@ def main():
     if len(msgs) > MAX_ALERTS_PER_RUN:
         extra = len(msgs) - MAX_ALERTS_PER_RUN
         msgs = msgs[:MAX_ALERTS_PER_RUN] + [f"<i>Masih ada {extra} alert lain di run ini (dipotong supaya tidak spam).</i>"]
-    for m in msgs:
+    for i, m in enumerate(msgs):
+        topic, m = m if isinstance(m, tuple) else ("intel", m)
         if dry or not (S.TG_TOKEN and S.TG_CHAT):
             print(m + "\n" + "-" * 40)
+            if dry and K:
+                K.simpan_contoh(m, f"intel_preview_{i}.png", topic)
+        elif K:
+            K.kirim(S, m, topic)                  # gambar; kalau gagal otomatis teks
         else:
-            S.send_routed(m, "intel")
+            S.send_routed(m, topic)
     if not dry:
         save_state(state)
     if not msgs:
