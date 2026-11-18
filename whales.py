@@ -17,6 +17,7 @@ Pakai:
   python whales.py --dry-run     # tampil di layar, tidak kirim dan tidak simpan state
   python whales.py               # kirim ke Telegram
 """
+import hashlib
 import html
 import json
 import os
@@ -33,6 +34,10 @@ try:
     import bantu
 except ImportError:          # file bantu.py belum diupload: berita tetap jalan tanpa terjemahan
     bantu = None
+try:
+    import kartu_teks as K   # kartu gambar untuk Radar Beli Whale
+except Exception:
+    K = None
 
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID")
@@ -340,8 +345,45 @@ def impact_line(labels):
     return ""
 
 
+NEWS_SEEN_H = 36               # berita yang sudah dilihat diingat selama ini
+NEWS_SIM = 0.5                 # kemiripan judul (Jaccard) untuk dianggap berita yang sama dari situs lain
+NEWS_SIM_MIN_SHARED = 4        # dan minimal segini kata yang sama
+
+
+def _lkey(link):
+    """Kunci dari tautan (tanpa parameter), supaya judul yang diedit situs tidak dianggap berita baru."""
+    base = (link or "").split("?")[0].split("#")[0].rstrip("/").lower()
+    return "L" + hashlib.md5(base.encode()).hexdigest()[:12] if base else ""
+
+
+def _toks(title):
+    """Kata-kata kunci judul. Angka dinormalkan (5,000 -> 5000, 450M -> 450) supaya berita yang sama dari situs lain cocok."""
+    t = re.sub(r"(?<=\d),(?=\d)", "", title.lower())
+    out = set(re.findall(r"[a-z0-9]{3,}", t))
+    out |= {m for m in re.findall(r"(\d+)[a-z]?\b", t) if len(m) >= 2}
+    return out
+
+
+def _same_story(a, b):
+    inter = a & b
+    if len(inter) < NEWS_SIM_MIN_SHARED:
+        return False
+    na, nb = {x for x in a if x.isdigit()}, {x for x in b if x.isdigit()}
+    if na and nb and not (na & nb):
+        return False                                        # angkanya beda semua = kejadian berbeda (misal pembelian lain)
+    jac = len(inter) / max(1, len(a | b))
+    num = any(x.isdigit() for x in inter)                   # angka yang sama (jumlah, harga) + kata kunci sama
+    return jac >= 0.4 or num or len(inter) / max(1, min(len(a), len(b))) >= 0.6
+
+
 def check_news(state, baseline):
-    seen = set(state.get("news_seen", []))
+    now_ts = time.time()
+    seen = state.get("news_seen", {})
+    if isinstance(seen, list):                              # format lama (daftar) -> kamus {kunci: waktu}
+        seen = {k: now_ts for k in seen}
+    seen = {k: t for k, t in seen.items() if now_ts - t < NEWS_SEEN_H * 3600}
+    recent = [r for r in state.get("news_recent", []) if now_ts - r["t"] < NEWS_SEEN_H * 3600]
+    rec_toks = [set(r["toks"]) for r in recent]
     cutoff = datetime.now(timezone.utc) - timedelta(hours=NEWS_MAX_AGE_H)
     found, keys, tok_list = [], set(), []
     for name, url in FEEDS:
@@ -349,9 +391,9 @@ def check_news(state, baseline):
             key = re.sub(r"\W+", "", it["title"].lower())[:70]
             if key in keys:
                 continue
-            toks = set(re.findall(r"[a-z0-9]{3,}", it["title"].lower()))
-            if any(len(toks & o) / max(1, len(toks | o)) >= 0.6 for o in tok_list):
-                continue                                   # berita yang sama dari situs lain
+            toks = _toks(it["title"])
+            if any(len(toks & o) / max(1, len(toks | o)) >= 0.6 or _same_story(toks, o) for o in tok_list):
+                continue                                   # berita yang sama dari situs lain (dalam run ini)
             keys.add(key)
             tok_list.append(toks)
             labels, weight = [], 0
@@ -359,13 +401,27 @@ def check_news(state, baseline):
                 if re.search(pat, it["title"], 0 if cs else re.I):
                     labels.append(label)
                     weight += w
-            it["key"], it["labels"], it["w"] = key, labels, weight
+            it["key"], it["lkey"], it["toks"] = key, _lkey(it["link"]), toks
+            it["labels"], it["w"] = labels, weight
             found.append(it)
     alerts = []
-    fresh = [it for it in found if it["key"] not in seen and it["ts"] >= cutoff and it["w"] >= NEWS_MIN_WEIGHT]
+    fresh = []
+    for it in found:
+        if it["key"] in seen or (it["lkey"] and it["lkey"] in seen):
+            continue                                       # sudah pernah dilihat (judul atau tautan sama)
+        if it["ts"] < cutoff or it["w"] < NEWS_MIN_WEIGHT:
+            continue
+        if any(_same_story(it["toks"], o) for o in rec_toks):
+            continue                                       # berita yang sama dari situs lain di run sebelumnya
+        fresh.append(it)
     fresh.sort(key=lambda x: (-x["w"], -x["ts"].timestamp()))
+    chosen = []
+    for it in fresh:                                       # antar kandidat di run ini juga jangan kembar
+        if any(_same_story(it["toks"], c["toks"]) for c in chosen):
+            continue
+        chosen.append(it)
     if not baseline:
-        for it in fresh[:MAX_NEWS_PER_RUN]:
+        for it in chosen[:MAX_NEWS_PER_RUN]:
             who = ", ".join(dict.fromkeys(it["labels"]))
             title = esc(bantu.translate_id(it["title"]) if bantu else it["title"])      # judul diterjemahkan ke Indonesia
             if it["w"] >= NEWS_IMPORTANT_WEIGHT:
@@ -373,7 +429,15 @@ def check_news(state, baseline):
             t = it["ts"].astimezone(WIB).strftime("%H:%M")
             alerts.append(f"<b>❗️ NEWS DARI ({esc(who)}) ❗️</b>\n{title}\n{esc(it['src'])} {t} WIB"
                           f"{impact_line(it['labels'])}\n{esc(it['link'])}")
-    state["news_seen"] = (list(seen | {it["key"] for it in found}))[-600:]
+    for it in found:                                       # ingat semuanya (urut waktu, dengan umur) supaya tidak muncul lagi
+        seen.setdefault(it["key"], now_ts)
+        if it["lkey"]:
+            seen.setdefault(it["lkey"], now_ts)
+    for it in (chosen if not baseline else found):
+        if it["w"] >= NEWS_MIN_WEIGHT:
+            recent.append({"t": now_ts, "toks": sorted(it["toks"])})
+    state["news_seen"] = seen
+    state["news_recent"] = recent[-300:]
     return alerts, bool(found)
 
 
@@ -450,7 +514,8 @@ def main():
     msgs = []
     for name, call in (("news", lambda: check_news(state, baseline)[0]),
                        ("holders", lambda: check_holders(state, baseline)),
-                       ("whales", lambda: check_whales(state, baseline)[0])):
+                       ("whales", lambda: check_whales(state, baseline)[0]),
+                       ("radar", lambda: __import__("whale_radar").check(state, baseline))):
         try:
             msgs += call()
         except Exception as e:
@@ -467,6 +532,11 @@ def main():
     for m in msgs:
         if dry or not (TG_TOKEN and TG_CHAT):
             print(m + "\n" + "-" * 40)
+            if dry and K and m.startswith("<b>🐋"):
+                K.simpan_contoh(m, f"whale_preview_{abs(hash(m)) % 1000}.png", "intel")
+        elif K and m.startswith("<b>🐋"):
+            import types
+            K.kirim(types.SimpleNamespace(TG_TOKEN=TG_TOKEN, TG_CHAT=TG_CHAT), m, "intel", fallback=send)
         else:
             send(m)
     if not dry:

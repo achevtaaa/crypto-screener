@@ -471,6 +471,79 @@ def check_ob_1d(tick, state):
     return out
 
 
+# ================================================================ 🚀 radar AWAL PUMP (belum diuji historis)
+EP_MIN_VOL24 = 2_000_000        # volume 24 jam minimal (USD), supaya bukan koin mati
+EP_CHG_MIN, EP_CHG_MAX = 1.0, 25.0     # kenaikan 24 jam: sudah mulai naik tapi belum terlambat (%)
+EP_GAIN3_MIN, EP_GAIN3_MAX = 2.0, 12.0 # kenaikan 3 jam terakhir (%)
+EP_VOL_RATIO = 4.0              # volume 1 jam terakhir vs median 24 jam sebelumnya
+EP_COOLDOWN_H = 12
+EP_MAX_ALERTS = 3
+EP_MAX_FETCH = 40
+
+
+def hourly_candles(inst):
+    """Candle 1H OKX yang sudah tutup: (ts, open, high, low, close, quote_vol), urut naik."""
+    j, _ = S.http_get("https://www.okx.com/api/v5/market/candles", {"instId": inst, "bar": "1H", "limit": "60"})
+    if not j or j.get("code") != "0":
+        return None
+    rows = sorted((r for r in j["data"] if r[8] == "1"), key=lambda r: int(r[0]))
+    return [(int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[7])) for r in rows]
+
+
+def check_early_pump(tick, state):
+    """Koin yang BARU mulai bergerak: volume 1 jam melonjak, harga naik 2-12% dalam 3 jam, belum naik jauh dalam 24 jam."""
+    st = state.setdefault("early", {"cool": {}})
+    now = time.time()
+    st["cool"] = {b: t for b, t in st["cool"].items() if now - t < 3 * 86400}
+    cands = sorted(((t["chg"], b, t) for b, t in tick.items()
+                    if not S.excluded(b) and b not in TOKENIZED_BLOCK and t["vol"] >= EP_MIN_VOL24
+                    and EP_CHG_MIN <= t["chg"] <= EP_CHG_MAX), reverse=True)[:EP_MAX_FETCH]
+    hits = []
+    for chg, base, t in cands:
+        if now - st["cool"].get(base, 0) < EP_COOLDOWN_H * 3600:
+            continue
+        try:
+            c = hourly_candles(t["id"])
+            time.sleep(0.12)
+            if not c or len(c) < 30:
+                continue
+            vols = sorted(x[5] for x in c[-25:-1])
+            med = vols[len(vols) // 2]
+            ts, o, h, l, cl, v = c[-1]
+            if med <= 0 or v < EP_VOL_RATIO * med or cl <= o or h == l or (cl - l) / (h - l) < 0.5:
+                continue
+            gain3 = (cl / c[-4][4] - 1) * 100
+            if not (EP_GAIN3_MIN <= gain3 <= EP_GAIN3_MAX):
+                continue
+            cvd, _ = S.cvd_proxy([(x[2], x[3], x[4], x[5]) for x in c], 12)
+            if cvd < S.CVD_POSITIVE:
+                continue
+            flags = S.risk_flags([(x[2], x[3], x[4], x[5]) for x in c], t["vol"])
+            hits.append((v / med, base, t, gain3, cvd, flags))
+        except Exception as e:
+            print("awal-pump skip", base, type(e).__name__)
+    out = []
+    for ratio, base, t, gain3, cvd, flags in sorted(hits, reverse=True)[:EP_MAX_ALERTS]:
+        tag = ""
+        if bantu:
+            try:
+                tag = bantu.narasi_label(base, 2)
+            except Exception:
+                tag = ""
+        lines = ["<b>🚀 AWAL PUMP 🚀</b>",
+                 f"<b><u>{esc(base)}</u></b>" + (f"  🏷️ {esc(tag)}" if tag else ""),
+                 f"📈 Naik <b>{gain3:+.1f}%</b> dalam 3 jam | 24 jam {t['chg']:+.1f}% | harga {t['last']:g}",
+                 f"📊 Volume 1 jam <b>{ratio:.1f}x</b> normal | volume 24 jam {money(t['vol'])}",
+                 f"🟢 Tekanan beli (CVD 12 jam): {cvd:+.2f}"]
+        for f in flags[:2]:
+            lines.append(f"⚠️ <i>{esc(f)}</i>")
+        lines.append("<i>" + esc("Radar awal, belum diuji historis, dan banyak yang gagal. Jangan kejar kalau sudah naik jauh. "
+                                  "Cek chart, pastikan ada di Bybit, risiko $1, SL wajib.") + "</i>")
+        out.append("\n".join(lines))
+        st["cool"][base] = now
+    return out
+
+
 # ================================================================ main
 def main():
     dry = "--dry-run" in sys.argv
@@ -491,7 +564,8 @@ def main():
                  ("dormant", lambda: check_dormant(tick, state)),
                  ("sec", lambda: check_sec_watch(tick, state)),
                  ("wallets", lambda: check_wallets(tick, state)),
-                 ("ob1d", lambda: check_ob_1d(tick, state))]
+                 ("ob1d", lambda: check_ob_1d(tick, state)),
+                 ("awal", lambda: check_early_pump(tick, state))]
     else:
         print("OKX tidak bisa diakses:", err)
     for name, fn in mods:
