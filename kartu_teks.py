@@ -22,9 +22,9 @@ except Exception:
 
 # warna aksen berdasarkan emoji di judul
 ACCENT = {"🧨": "red", "🚨": "red", "❗": "red", "💤": "violet", "💵": "green", "🔄": "green", "✅": "green",
-          "🕵": "amber", "⚡": "amber", "🐳": "blue", "🐋": "blue", "🚀": "green", "📜": "blue", "🧱": "violet", "🏷": "blue"}
+          "🕵": "amber", "⚡": "amber", "🐳": "blue", "🐋": "blue", "🚀": "green", "📊": "violet", "📜": "blue", "🧱": "violet", "🏷": "blue"}
 MARK = {"✅": "green", "❌": "red", "➖": "mute", "⚠": "amber", "🟢": "green", "🔴": "red", "🟡": "amber",
-        "🟣": "violet", "🔵": "blue"}
+        "🟣": "violet", "🔵": "blue", "⚪": "mute"}
 EMOJI_RE = re.compile("[\U0001F000-\U0001FFFF☀-➿⬀-⯿️‍⃣]")
 TAG_RE = re.compile(r"(<[^>]+>)")
 MAX_LOGICAL_H = 3800
