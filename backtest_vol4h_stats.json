@@ -1,0 +1,28 @@
+{
+ "updated": "2026-11-19",
+ "coins": 60,
+ "baseline": {
+  "n": 10131,
+  "win": 0.31418418714835655,
+  "exp": -0.1549556233315724,
+  "se": 0.011424954108933473
+ },
+ "rows": {
+  "Volume duluan (tanpa filter CVD)": {
+   "n": 528,
+   "win": 0.36174242424242425,
+   "exp": -0.05929641853308778,
+   "se": 0.05156357599394431,
+   "verdict": "sedikit lebih baik, belum meyakinkan",
+   "icon": "\u2796"
+  },
+  "Volume duluan + CVD positif": {
+   "n": 344,
+   "win": 0.37209302325581395,
+   "exp": -0.06291497738468016,
+   "se": 0.06436156438508005,
+   "verdict": "sedikit lebih baik, belum meyakinkan",
+   "icon": "\u2796"
+  }
+ }
+}
